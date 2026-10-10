@@ -39,7 +39,7 @@ def test_modules_package_uses_static_imports_only():
 
 
 def test_selfcheck_in_fresh_process(tmp_path):
-    proc = subprocess.run([sys.executable, "-I", "-m", "mirza2nexa", "selfcheck"], capture_output=True, text=True,
+    proc = subprocess.run([sys.executable, "-I", "-m", "mirza2nexa", "selfcheck"], capture_output=True, text=True, encoding="utf-8", errors="replace",
                           env=_env(tmp_path), timeout=120)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     status = json.loads(proc.stdout)
@@ -65,13 +65,13 @@ def test_missing_converter_module_fails_closed(tmp_path):
     zp, _ = make_backup(tmp_path, users=50)
     out = tmp_path / "out"
     proc = subprocess.run([sys.executable, "-I", "-c", _BLOCK_PAYMENTS, "convert", str(zp), "-o", str(out),
-                           "--money-unit", "toman"], capture_output=True, text=True, env=_env(tmp_path), timeout=300)
+                           "--money-unit", "toman"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=_env(tmp_path), timeout=300)
     assert proc.returncode != 0
     assert "mirza2nexa.modules.payments" in proc.stderr or "catalogue.incomplete" in proc.stderr
     assert not list(out.glob("*.nxpkg")) if out.exists() else True
     assert not (out / "report.json").exists()
 
-    sc = subprocess.run([sys.executable, "-I", "-c", _BLOCK_PAYMENTS, "selfcheck"], capture_output=True, text=True,
+    sc = subprocess.run([sys.executable, "-I", "-c", _BLOCK_PAYMENTS, "selfcheck"], capture_output=True, text=True, encoding="utf-8", errors="replace",
                         env=_env(tmp_path), timeout=120)
     assert sc.returncode != 0
 
@@ -109,7 +109,7 @@ def test_fresh_processes_are_repeatable_and_cover_phase2_tables(tmp_path):
         env = {**_env(tmp_path), "ZPW": "Zip-Pw-1"}
         proc = subprocess.run([sys.executable, "-I", "-m", "mirza2nexa", "convert", str(zp), "-o", str(out),
                                "--money-unit", "toman", "--password-env", "ZPW"],
-                              capture_output=True, text=True, env=env, timeout=600)
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=600)
         assert proc.returncode == 0, proc.stderr[-2000:]
         results.append(json.loads((out / "report.json").read_text(encoding="utf-8")))
     first = _logical(results[0])
@@ -137,7 +137,7 @@ def test_expected_tables_match_evidence_and_catalogue():
 
 def test_missing_module_gives_clear_selfcheck_json(tmp_path):
     proc = subprocess.run([sys.executable, "-I", "-c", _BLOCK_PAYMENTS, "selfcheck"], capture_output=True,
-                          text=True, env=_env(tmp_path), timeout=120)
+                          text=True, encoding="utf-8", errors="replace", env=_env(tmp_path), timeout=120)
     assert proc.returncode == 3
     status = json.loads(proc.stdout.strip().splitlines()[-1])
     assert status["ok"] is False and status["missing_modules"] == ["mirza2nexa.modules.payments"]

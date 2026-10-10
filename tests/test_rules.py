@@ -93,6 +93,6 @@ def test_row_checksum_parity_with_nexa_javascript():
         "const c=require('crypto');const cases=JSON.parse(process.argv[1]);"
         "console.log(JSON.stringify(cases.map(f=>c.createHash('sha256').update('user:v1:'+JSON.stringify(f)).digest('hex'))))"
     )
-    out = subprocess.run(["node", "-e", script, json.dumps(cases)], capture_output=True, text=True, check=True)
+    out = subprocess.run(["node", "-e", script, json.dumps(cases)], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
     js = json.loads(out.stdout)
     assert js == [rules.row_checksum("user:v1", f) for f in cases]

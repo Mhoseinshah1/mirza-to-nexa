@@ -18,7 +18,7 @@ def test_fresh_process_cli_converts_every_domain_table(tmp_path):
     out = tmp_path / "out"
     env = {**os.environ, "MIRZA2NEXA_HOME": str(tmp_path / "home")}
     proc = subprocess.run([sys.executable, "-I", "-m", "mirza2nexa", "convert", str(zp), "-o", str(out),
-                           "--money-unit", "toman"], capture_output=True, text=True, env=env, timeout=600)
+                           "--money-unit", "toman"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=600)
     assert proc.returncode == 0, proc.stderr[-2000:]
     report = json.loads((out / "report.json").read_text(encoding="utf-8"))
     assert report["readiness"] == "ready", report["blockers"]
