@@ -207,13 +207,13 @@
     ownership_review: {
       final_class: {
         PROVEN: 'مالکیت اثبات‌شده',
-        ADMIN_ATTESTED: 'تأیید مدیر (اثبات نشده)',
+        ADMIN_APPROVED_UNVERIFIED: 'تأیید مدیر (اثبات نشده)',
         PENDING: 'در انتظار تصمیم',
         REJECTED: 'رد شده — قرنطینه',
         QUARANTINED: 'قرنطینه سیستمی',
       },
-      review_state: { PENDING: 'در انتظار', APPROVED: 'تأییدشده توسط مدیر', REJECTED: 'ردشده توسط مدیر' },
-      eligibility: { PROVEN: 'اثبات‌شده', ATTESTABLE: 'قابل تأیید مدیر', QUARANTINE_ONLY: 'فقط قرنطینه' },
+      review_state: { PENDING: 'در انتظار', ADMIN_APPROVED_UNVERIFIED: 'تأیید مدیر — اثبات نشده', REJECTED: 'ردشده توسط مدیر' },
+      eligibility: { PROVEN: 'اثبات‌شده', ATTESTABLE: 'قابل تأیید مدیر', ATTESTABLE_HIGH_RISK: 'قابل تأیید مدیر — پرریسک', QUARANTINE_ONLY: 'فقط قرنطینه' },
       action: {
         APPROVE: 'تأیید مالک ثبت‌شده در فاکتور',
         REJECT: 'رد و انتقال به قرنطینه',
@@ -1676,7 +1676,7 @@
         el('h3', { text: rkLabel('admin_review') }),
         el('div', { class: 'stat-grid own-summary' },
           tile('proven', 'own-proven', fcl('PROVEN')),
-          tile('admin_attested', 'own-attested', fcl('ADMIN_ATTESTED')),
+          tile('admin_approved_unverified', 'own-attested', fcl('ADMIN_APPROVED_UNVERIFIED')),
           tile('pending', 'own-pending', fcl('PENDING')),
           tile('rejected', 'own-rejected', fcl('REJECTED')),
           tile('quarantined', 'own-quarantined', fcl('QUARANTINED'))),
@@ -2184,7 +2184,7 @@
   // resolves it in a two-phase plan → commit flow. Owner details are shown only in the detail dialog.
   const OWN_PAGE = 100;
   const OWN_FILTERS = ['final_class', 'eligibility', 'review_state', 'panel', 'status_class', 'reason', 'live_status'];
-  const OWN_CLASSES = ['PROVEN', 'ADMIN_ATTESTED', 'PENDING', 'REJECTED', 'QUARANTINED'];
+  const OWN_CLASSES = ['PROVEN', 'ADMIN_APPROVED_UNVERIFIED', 'PENDING', 'REJECTED', 'QUARANTINED'];
   const OWN = {
     jobId: null,
     summary: null,
@@ -2289,7 +2289,7 @@
         el('div', { class: 'stat-label', text: 'کل سرویس‌ها' }),
         el('div', { class: 'stat-value num', 'data-value': String(Number(t.items) || 0), text: fmtNum(Number(t.items) || 0) })),
       card('PROVEN', ownLabel('final_class', 'PROVEN'), 'با شواهد بکاپ', 'own-proven'),
-      card('ADMIN_ATTESTED', ownLabel('final_class', 'ADMIN_ATTESTED'), 'تصمیم مدیر — جدا از اثبات‌شده', 'own-attested'),
+      card('ADMIN_APPROVED_UNVERIFIED', ownLabel('final_class', 'ADMIN_APPROVED_UNVERIFIED'), 'تصمیم مدیر — جدا از اثبات‌شده', 'own-attested'),
       card('PENDING', ownLabel('final_class', 'PENDING'), null, 'own-pending'),
       card('REJECTED', ownLabel('final_class', 'REJECTED'), null, 'own-rejected'),
       card('QUARANTINED', ownLabel('final_class', 'QUARANTINED'), 'قابل تأیید در این صفحه نیست', 'own-quarantined'));
@@ -2668,6 +2668,11 @@
     $('own-plan-count').value = '';
     $('own-plan-count').removeAttribute('aria-invalid');
     $('own-plan-ack').checked = false;
+    const explicit = Array.isArray(p.explicit_acceptance_required) ? p.explicit_acceptance_required : [];
+    $('own-plan-highrisk').hidden = explicit.length === 0 || need <= 0;
+    $('own-plan-highrisk-ack').checked = false;
+    $('own-plan-highrisk-text').textContent = explicit.length
+      ? fmtNum(Number(p.high_risk_items) || 0) + ' مورد پرریسک: ' + ownLabel('risk', 'OWNER_MISMATCH_NO_TRANSFER') : '';
     $('own-plan-count-label').textContent = 'برای تأیید، تعداد مواردی را که تغییر می‌کنند (' + fmtNum(need) + ') تایپ کنید';
     $('own-plan-ack-text').textContent = action === 'APPROVE'
       ? 'می‌دانم این تأیید مدیر است، مالکیت را اثبات نمی‌کند و جدا از موارد اثبات‌شده نگه داشته می‌شود.'
@@ -2686,7 +2691,8 @@
     const p = OWN.plan;
     const need = p ? ownRequiredCount(p) : 0;
     const typed = latinDigits($('own-plan-count').value);
-    const ok = need > 0 && /^\d+$/.test(typed) && Number(typed) === need && $('own-plan-ack').checked;
+    const ok = need > 0 && /^\d+$/.test(typed) && Number(typed) === need && $('own-plan-ack').checked &&
+      ($('own-plan-highrisk').hidden || $('own-plan-highrisk-ack').checked);
     $('own-plan-commit').disabled = !ok;
   }
 
@@ -2702,12 +2708,15 @@
     const need = ownRequiredCount(p);
     const typed = latinDigits($('own-plan-count').value);
     if (!/^\d+$/.test(typed) || Number(typed) !== need || !$('own-plan-ack').checked) return;
+    const explicit = Array.isArray(p.explicit_acceptance_required) ? p.explicit_acceptance_required : [];
+    if (explicit.length && !$('own-plan-highrisk-ack').checked) return;
     const btn = $('own-plan-commit');
     btn.disabled = true;
     const err = $('own-plan-error');
     err.hidden = true;
     try {
-      const r = await api('POST', ownPath('/commit'), { plan_id: p.plan_id, confirm_count: Number(typed), acknowledge: true });
+      const r = await api('POST', ownPath('/commit'), { plan_id: p.plan_id, confirm_count: Number(typed), acknowledge: true,
+        accept_risks: explicit.length && $('own-plan-highrisk-ack').checked ? explicit : [] });
       ownClosePlan();
       $('own-note').value = '';
       ownClearSelection();
@@ -3081,6 +3090,7 @@
       if (ev.key === 'Enter') ev.preventDefault();
     });
     $('own-plan-ack').addEventListener('change', ownSyncCommit);
+    $('own-plan-highrisk-ack').addEventListener('change', ownSyncCommit);
     $('own-plan-commit').addEventListener('click', ownCommit);
     $('own-plan-replan').addEventListener('click', ownReplan);
     $('own-plan-cancel').addEventListener('click', ownClosePlan);

@@ -427,10 +427,12 @@ details.recon-section > summary h3 { display: inline-block; margin: 0 0 .3rem; }
 .own-table tbody tr.is-unviewed td:nth-child(2) .linkish { font-weight: 700; }
 .linkish { background: none; border: 0; padding: 0; font: inherit; color: var(--primary); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .badge.own-fc-PROVEN { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
-.badge.own-fc-ADMIN_ATTESTED { background: var(--warn-soft); color: var(--warn); border: 1px dashed var(--warn); }
+.badge.own-fc-ADMIN_APPROVED_UNVERIFIED { background: var(--warn-soft); color: var(--warn); border: 1px dashed var(--warn); }
 .badge.own-fc-PENDING { background: var(--primary-soft); color: var(--primary); border-color: transparent; }
 .badge.own-fc-REJECTED, .badge.own-fc-QUARANTINED { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
 .badge.own-elig-QUARANTINE_ONLY { color: var(--bad); }
+.badge.own-elig-ATTESTABLE_HIGH_RISK { color: var(--warn); background: var(--warn-soft); font-weight: 600; }
+.own-high-risk { border: 2px solid var(--warn); background: var(--warn-soft); border-radius: 8px; padding: 8px 12px; margin-top: 8px; }
 .badge.own-sev-high { background: var(--bad-soft); color: var(--bad); border-color: var(--bad); }
 .badge.own-sev-medium { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
 .badge.own-sev-info { background: var(--primary-soft); color: var(--primary); border-color: transparent; }

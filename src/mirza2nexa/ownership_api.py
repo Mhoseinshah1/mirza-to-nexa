@@ -182,10 +182,10 @@ def readiness_overlay(sessions: Sessions, data: dict[str, Any]) -> dict[str, Any
     s = store.summary()
     own = dict(data.get("ownership") or {})
     own["admin_review"] = {
-        "proven": s["totals"]["PROVEN"], "admin_attested": s["totals"]["ADMIN_ATTESTED"],
+        "proven": s["totals"]["PROVEN"], "admin_approved_unverified": s["totals"]["ADMIN_APPROVED_UNVERIFIED"],
         "pending": s["totals"]["PENDING"], "rejected": s["totals"]["REJECTED"],
         "quarantined": s["totals"]["QUARANTINED"], "stale": s["stale"], "sealed": s["sealed"],
-        "admin_attested_is_proof": False,
+        "admin_approved_unverified_is_proof": False,
     }
     return {**data, "ownership": own}
 
@@ -283,7 +283,8 @@ def register(app: FastAPI, manager: JobManager, job_or_404: Callable[[str], Job 
         if isinstance(body, JSONResponse):
             return body
         return await call(lambda: s.store.commit(body.get("plan_id"), confirm_count=body.get("confirm_count"),
-                                                 acknowledge=body.get("acknowledge")))
+                                                 acknowledge=body.get("acknowledge"),
+                                                 accept_risks=body.get("accept_risks")))
 
     @app.get(base + "/batches")
     async def own_batches(job_id: str) -> Response:

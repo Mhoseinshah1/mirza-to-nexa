@@ -58,6 +58,10 @@ def load(store, n_attest=50, n_proven=20, n_quarantine=10):
     (rec(1, "NO_CONFLICT", ()), "PROVEN"),
     (rec(1), "ATTESTABLE"),
     (rec(1, reasons=("OWNERSHIP_TRANSFER_CHAIN_BROKEN", "OWNERSHIP_ACTOR_NOT_IN_USER_TABLE")), "ATTESTABLE"),
+    (rec(1, reasons=("OWNERSHIP_OWNER_MISMATCH_NO_TRANSFER_RECORD",)), "ATTESTABLE_HIGH_RISK"),
+    (rec(1, reasons=("OWNERSHIP_OWNER_MISMATCH_NO_TRANSFER_RECORD", "OWNERSHIP_MULTIPLE_CLAIMANTS")),
+     "QUARANTINE_ONLY"),
+    (rec(1, reasons=("OWNERSHIP_TRANSFER_TARGET_INVALID",)), "QUARANTINE_ONLY"),
     (rec(1, reasons=("OWNERSHIP_ACTION_OUTSIDE_HOLDING_WINDOW", "OWNERSHIP_MULTIPLE_CLAIMANTS")), "QUARANTINE_ONLY"),
     (rec(1, reasons=("OWNERSHIP_TRANSFER_NOT_APPLIED_TO_INVOICE",)), "QUARANTINE_ONLY"),
     (rec(1, reasons=("OWNERSHIP_USERNAME_SHARED_BY_INVOICES",)), "QUARANTINE_ONLY"),
@@ -95,14 +99,14 @@ def test_bulk_approve_all_filtered_5000_plus(store):
     with pytest.raises(orv.ReviewError) as e:
         store.commit(plan["plan_id"], confirm_count=n, acknowledge=False)
     assert e.value.code == "ownership.not_acknowledged"
-    assert store.summary()["totals"]["ADMIN_ATTESTED"] == 0  # refused commits changed nothing
+    assert store.summary()["totals"]["ADMIN_APPROVED_UNVERIFIED"] == 0  # refused commits changed nothing
 
     res = store.commit(plan["plan_id"], confirm_count=n, acknowledge=True)
     assert res["applied"] == n and res["idempotent_replay"] is False
     assert time.time() - t < 30
     s1 = store.summary()
-    assert s1["totals"]["ADMIN_ATTESTED"] == n and s1["totals"]["PROVEN"] == 300  # kept apart
-    assert s1["totals"]["QUARANTINED"] == 200 and s1["admin_attested_is_proof"] is False
+    assert s1["totals"]["ADMIN_APPROVED_UNVERIFIED"] == n and s1["totals"]["PROVEN"] == 300  # kept apart
+    assert s1["totals"]["QUARANTINED"] == 200 and s1["admin_approved_unverified_is_proof"] is False
 
     # idempotent: same commit again → same batch, nothing re-applied
     again = store.commit(plan["plan_id"], confirm_count=n, acknowledge=True)
@@ -126,9 +130,9 @@ def test_filters_and_exclusions(store):
     plan = store.plan("APPROVE", {"mode": "filter", "filter": {"panel": ["p-b"]}, "exclude_keys": excl})
     assert plan["applicable"] == 15
     store.commit(plan["plan_id"], confirm_count=15, acknowledge=True)
-    assert store.items({"review_state": "APPROVED"})["total"] == 15
+    assert store.items({"review_state": "ADMIN_APPROVED_UNVERIFIED"})["total"] == 15
     f = store.facets()
-    assert {x["value"]: x["count"] for x in f["final_class"]} == {"ADMIN_ATTESTED": 15, "PENDING": 25}
+    assert {x["value"]: x["count"] for x in f["final_class"]} == {"ADMIN_APPROVED_UNVERIFIED": 15, "PENDING": 25}
     with pytest.raises(orv.ReviewError):
         store.items({"panel": "x' OR 1=1 --", "status_class": 5})
 
@@ -184,7 +188,7 @@ def test_stale_plan_is_refused(store):
     with pytest.raises(orv.ReviewError) as e:
         store.commit(p1["plan_id"], confirm_count=10, acknowledge=True)
     assert e.value.code == "ownership.plan_stale"
-    assert store.summary()["totals"]["ADMIN_ATTESTED"] == 0
+    assert store.summary()["totals"]["ADMIN_APPROVED_UNVERIFIED"] == 0
 
 
 def test_expired_and_unknown_plans(store, monkeypatch):
@@ -248,7 +252,7 @@ def test_changed_record_makes_decision_stale(store):
     store.sync(recs, invoices(recs))
     it = store.item(keys[0])
     assert it["stale"] is True and it["final_class"] == "PENDING"
-    assert store.summary()["totals"]["ADMIN_ATTESTED"] == 3 and store.summary()["stale"] == 1
+    assert store.summary()["totals"]["ADMIN_APPROVED_UNVERIFIED"] == 3 and store.summary()["stale"] == 1
     doc = store.export_document()
     e = next(x for x in doc["entries"] if x["key"] == keys[0])
     assert e["stale"] is True and e["class"] == "PENDING"
@@ -266,7 +270,7 @@ def test_persistence_and_replay_after_restart(tmp_path):
     s1.close()
     s2 = orv.ReviewStore.for_import(base, "ef" * 32)
     s2.sync(recs, invoices(recs))
-    assert s2.summary()["totals"]["ADMIN_ATTESTED"] == 8
+    assert s2.summary()["totals"]["ADMIN_APPROVED_UNVERIFIED"] == 8
     again = s2.commit(p["plan_id"], confirm_count=8, acknowledge=True)
     assert again["idempotent_replay"] is True and again["batch_id"] == res["batch_id"]
     s2.close()
@@ -299,7 +303,7 @@ def test_export_signed_with_package_key(tmp_path, store):
     key = orv.decisions_key(res.package_path, key_text=res.key_text)
     doc = orv.sign_export(store.export_document(), key)
     assert doc["schema"] == orv.EXPORT_SCHEMA and doc["admin_attestation_is_proof"] is False
-    assert doc["summary"]["ADMIN_ATTESTED"] == 3 and doc["summary"]["PROVEN"] == 20
+    assert doc["summary"]["ADMIN_APPROVED_UNVERIFIED"] == 3 and doc["summary"]["PROVEN"] == 20
     assert {e["basis"] for e in doc["entries"]} >= {"ADMIN_ATTESTATION", "EVIDENCE", "SYSTEM_QUARANTINE"}
     assert orv.verify_export(doc, key)
     tampered = json.loads(json.dumps(doc))
@@ -335,7 +339,7 @@ def test_undo_never_resurrects_a_decision_replaced_later(store):
     _commit(store, "RESET", [y])
     _commit(store, "APPROVE", [y])             # same state as b1 set, but a later batch made it
     assert store.plan("UNDO", {"mode": "batch", "batch_id": b1["batch_id"]})["superseded"] == 1
-    assert store.item(y)["final_class"] == "ADMIN_ATTESTED"
+    assert store.item(y)["final_class"] == "ADMIN_APPROVED_UNVERIFIED"
 
 
 def test_two_stores_on_one_file_cannot_race(tmp_path):
@@ -398,11 +402,67 @@ def test_plan_breaks_down_reasons_and_stores_only_known_filter_fields(store):
     recs = [rec(i, reasons=("OWNERSHIP_OWNER_MISMATCH_NO_TRANSFER_RECORD",)) for i in range(4)]
     recs += [rec(10 + i) for i in range(2)]
     store.sync(recs, invoices(recs))
-    p = store.plan("APPROVE", {"mode": "filter", "filter": {"eligibility": ["ATTESTABLE"], "junk": "x" * 50},
-                               "exclude_keys": []})
+    p = store.plan("APPROVE", {"mode": "filter", "filter": {"eligibility": ["ATTESTABLE", "ATTESTABLE_HIGH_RISK"],
+                                                          "junk": "x" * 50}, "exclude_keys": []})
     assert p["applicable_by_reason"] == {"OWNERSHIP_ACTION_OUTSIDE_HOLDING_WINDOW": 2,
                                          "OWNERSHIP_OWNER_MISMATCH_NO_TRANSFER_RECORD": 4}
-    res = store.commit(p["plan_id"], confirm_count=6, acknowledge=True)
+    res = store.commit(p["plan_id"], confirm_count=6, acknowledge=True, accept_risks=p["explicit_acceptance_required"])
     sel = sqlite3.connect(str(store.path)).execute("SELECT selection FROM batches WHERE batch_id = ?",
                                                    (res["batch_id"],)).fetchone()[0]
-    assert "junk" not in sel and json.loads(sel)["filter"] == {"eligibility": ["ATTESTABLE"]}
+    assert "junk" not in sel
+    assert json.loads(sel)["filter"] == {"eligibility": ["ATTESTABLE", "ATTESTABLE_HIGH_RISK"]}
+
+
+# ---- owner decision: OWNER_MISMATCH_NO_TRANSFER_RECORD stays attestable with a second acceptance --
+
+def test_owner_mismatch_needs_second_explicit_acceptance(store):
+    mismatch = [rec(i, reasons=("OWNERSHIP_OWNER_MISMATCH_NO_TRANSFER_RECORD",)) for i in range(5)]
+    plain = [rec(100 + i) for i in range(3)]
+    forced = [rec(200, "INVALID_OWNER", ("OWNERSHIP_OWNER_ID_INVALID",)),
+              rec(201, reasons=("OWNERSHIP_MULTIPLE_CLAIMANTS",)),
+              rec(202, reasons=("OWNERSHIP_TRANSFER_NOT_APPLIED_TO_INVOICE", "OWNERSHIP_OWNER_MISMATCH_NO_TRANSFER_RECORD"))]
+    recs = mismatch + plain + forced
+    store.sync(recs, invoices(recs))
+    # shown separately in the filter
+    facets = {f["value"]: f["count"] for f in store.facets()["eligibility"]}
+    assert facets["ATTESTABLE_HIGH_RISK"] == 5 and facets["ATTESTABLE"] == 3 and facets["QUARANTINE_ONLY"] == 3
+    assert store.items({"eligibility": "ATTESTABLE_HIGH_RISK"})["total"] == 5
+
+    p = store.plan("APPROVE", {"mode": "filter", "filter": {}})
+    assert p["applicable"] == 8 and p["high_risk_items"] == 5
+    assert p["explicit_acceptance_required"] == ["OWNER_MISMATCH_NO_TRANSFER"]
+    top = p["risks"][0]
+    assert top == {"code": "OWNER_MISMATCH_NO_TRANSFER", "count": 5, "severity": "high",
+                   "requires_explicit_acceptance": True}
+    assert p["not_eligible"]["total"] == 3  # forced quarantine, whatever the selection
+    for bad in (None, [], ["SOMETHING_ELSE"]):
+        with pytest.raises(orv.ReviewError) as e:
+            store.commit(p["plan_id"], confirm_count=8, acknowledge=True, accept_risks=bad)
+        assert e.value.code == "ownership.risk_not_accepted"
+    assert store.summary()["totals"]["ADMIN_APPROVED_UNVERIFIED"] == 0
+
+    res = store.commit(p["plan_id"], confirm_count=8, acknowledge=True,
+                       accept_risks=["OWNER_MISMATCH_NO_TRANSFER"])
+    for r in mismatch:
+        it = store.item(r["idempotency_key"])
+        assert it["review_state"] == "ADMIN_APPROVED_UNVERIFIED" and it["final_class"] == "ADMIN_APPROVED_UNVERIFIED"
+        assert it["basis"] == "ADMIN_ATTESTATION"
+    for r in forced:
+        assert store.item(r["idempotency_key"])["final_class"] == "QUARANTINED"
+    s = store.summary()
+    assert s["totals"]["ADMIN_APPROVED_UNVERIFIED"] == 8 and s["totals"]["PROVEN"] == 0
+    assert s["admin_approved_unverified_is_proof"] is False
+    # the explicit acceptance is part of the audited record, and the batch stays reversible
+    batch_ev = store.audit(0, 1)["items"][0]
+    assert batch_ev["action"] == "BATCH_APPROVE"
+    assert json.loads(batch_ev["note"])["accepted_risks"] == ["OWNER_MISMATCH_NO_TRANSFER"]
+    assert store.verify_audit()["ok"]
+    undo = store.plan("UNDO", {"mode": "batch", "batch_id": res["batch_id"]})
+    store.commit(undo["plan_id"], confirm_count=8, acknowledge=True)
+    assert store.summary()["totals"]["ADMIN_APPROVED_UNVERIFIED"] == 0
+    # a plan without high-risk items needs no extra acceptance
+    p2 = store.plan("APPROVE", {"mode": "filter", "filter": {"eligibility": "ATTESTABLE"}})
+    assert p2["explicit_acceptance_required"] == []
+    store.commit(p2["plan_id"], confirm_count=3, acknowledge=True)
+    entries = {e["key"]: e for e in store.export_document()["entries"]}
+    assert entries[plain[0]["idempotency_key"]]["class"] == "ADMIN_APPROVED_UNVERIFIED"

@@ -224,7 +224,7 @@ An optional companion file produced by the converter's bulk ownership review. Th
 | `class` / `basis` | Importer action |
 |---|---|
 | `PROVEN` / `EVIDENCE` | as `CONFIRMED_*` above |
-| `ADMIN_ATTESTED` / `ADMIN_ATTESTATION` | may enter P6 adoption with owner = `invoice.id_user` **only**; recorded as `ownership_basis = ADMIN_ATTESTATION` (never as proven) with the batch id in the audit log |
+| `ADMIN_APPROVED_UNVERIFIED` / `ADMIN_ATTESTATION` | may enter P6 adoption with owner = `invoice.id_user` **only**; recorded as `ownership_basis = ADMIN_ATTESTATION` (never as proven) with the batch id in the audit log |
 | `REJECTED` / `ADMIN_REJECTION` | quarantine `SERVICE_OWNERSHIP_REJECTED_BY_ADMIN` |
 | `QUARANTINED` / `SYSTEM_QUARANTINE`, `PENDING`, `stale: true` | quarantine as in the table above |
 

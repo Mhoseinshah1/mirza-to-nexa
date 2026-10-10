@@ -441,13 +441,13 @@ READINESS_KEY_FA: dict[str, str] = {
     "conflict_warnings_after": "هشدار تعارض (پس از تحلیل)",
     "proven_by_data": "اثبات‌شده با داده",
     "admin_review": "بررسی مدیر (جدا از اثبات)",
-    "admin_attested": "تأیید مدیر (اثبات نشده)",
+    "admin_approved_unverified": "تأیید مدیر (اثبات نشده)",
     "pending": "در انتظار تصمیم",
     "rejected": "رد شده — قرنطینه",
     "quarantined": "قرنطینه سیستمی",
     "stale": "تصمیم‌های کهنه",
     "sealed": "مهر و موم شده",
-    "admin_attested_is_proof": "تأیید مدیر اثبات است؟",
+    "admin_approved_unverified_is_proof": "تأیید مدیر اثبات است؟",
 }
 
 # Ownership decisions for service candidates (``convert.py`` services decisions + readiness extras).
@@ -565,10 +565,10 @@ REVIEW_ACTIONABILITY_FA: dict[str, str] = {
 }
 
 
-# Bulk ownership review (``ownership_review.py``, docs/OWNERSHIP_REVIEW.md). ADMIN_ATTESTED is never proof.
+# Bulk ownership review (``ownership_review.py``, docs/OWNERSHIP_REVIEW.md). ADMIN_APPROVED_UNVERIFIED is never proof.
 OWNERSHIP_FINAL_CLASS_FA: dict[str, str] = {
     "PROVEN": "مالکیت اثبات‌شده",
-    "ADMIN_ATTESTED": "تأیید مدیر (اثبات نشده)",
+    "ADMIN_APPROVED_UNVERIFIED": "تأیید مدیر (اثبات نشده)",
     "PENDING": "در انتظار تصمیم",
     "REJECTED": "رد شده — قرنطینه",
     "QUARANTINED": "قرنطینه سیستمی",
@@ -576,13 +576,14 @@ OWNERSHIP_FINAL_CLASS_FA: dict[str, str] = {
 
 OWNERSHIP_REVIEW_STATE_FA: dict[str, str] = {
     "PENDING": "در انتظار",
-    "APPROVED": "تأییدشده توسط مدیر",
+    "ADMIN_APPROVED_UNVERIFIED": "تأیید مدیر — اثبات نشده",
     "REJECTED": "ردشده توسط مدیر",
 }
 
 OWNERSHIP_ELIGIBILITY_FA: dict[str, str] = {
     "PROVEN": "اثبات‌شده با شواهد",
     "ATTESTABLE": "قابل تأیید مدیر",
+    "ATTESTABLE_HIGH_RISK": "قابل تأیید مدیر — پرریسک (اقدام کاربر دیگر بدون ثبت انتقال)",
     "QUARANTINE_ONLY": "فقط قرنطینه",
 }
 
@@ -600,6 +601,8 @@ OWNERSHIP_LIVE_STATUS_FA: dict[str, str] = {
 
 OWNERSHIP_RISK_FA: dict[str, str] = {
     "ADMIN_ATTESTATION_NOT_PROOF": "تأیید مدیر اثبات مالکیت نیست؛ این موارد جدا از موارد اثبات‌شده نگه داشته می‌شوند",
+    "OWNER_MISMATCH_NO_TRANSFER": "کاربر دیگری بدون ثبت انتقال روی این سرویس‌ها اقدام کرده است؛ تأیید مالک فاکتور "
+                                  "فقط با پذیرش جداگانه و صریح این ریسک ممکن است",
     "UNVIEWED_ITEMS": "مواردی که هرگز باز و بررسی نشده‌اند",
     "LIVE_NOT_CHECKED": "وضعیت روی پنل بررسی نشده است",
     "LIVE_NOT_FOUND": "سرویس روی پنل پیدا نشد",

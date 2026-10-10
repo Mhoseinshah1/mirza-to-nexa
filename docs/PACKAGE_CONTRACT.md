@@ -114,11 +114,11 @@ the record itself and refuses unknown values (gate G5).
 The package is immutable once written, so administrator ownership decisions taken afterwards in the
 bulk ownership review (`OWNERSHIP_REVIEW.md`) travel as a separate, authenticated companion file
 (`schema: m2n.ownership_decisions.v1`). It carries `import_id`, `source_fingerprint`, `sealed`, the
-audit-chain head, totals per class (`PROVEN`, `ADMIN_ATTESTED`, `PENDING`, `REJECTED`, `QUARANTINED`)
+audit-chain head, totals per class (`PROVEN`, `ADMIN_APPROVED_UNVERIFIED`, `PENDING`, `REJECTED`, `QUARANTINED`)
 and one entry per service (`key`, `invoice_key`, `class`, `basis`, `review_state`, `batch_id`, `binding`,
 `stale`). `authentication.mac` is HMAC-SHA256 over the canonical JSON of the document without
 `authentication`, keyed with HKDF-SHA256 of the package secret (`info = nxpkg-v1/ownership-decisions`).
-Importer rules: `NEXA_IMPORTER_DESIGN.md` §8.1. `ADMIN_ATTESTED` is never proof of ownership.
+Importer rules: `NEXA_IMPORTER_DESIGN.md` §8.1. `ADMIN_APPROVED_UNVERIFIED` is never proof of ownership.
 
 ## Manifest additions (1.1.0)
 

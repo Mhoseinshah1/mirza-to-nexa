@@ -462,10 +462,10 @@ def test_bulk_ownership_review_approve_and_undo(ui, server, tmp_path):
     page.click("[data-testid=nav-ownership]")
     page.wait_for_selector("[data-testid=own-card-PROVEN] .stat-value[data-value]")
     page.wait_for_selector("[data-testid=own-table] tbody tr[data-key]")
-    assert "اثبات نشده" in (page.text_content("[data-testid=own-card-ADMIN_ATTESTED]") or "")
+    assert "اثبات نشده" in (page.text_content("[data-testid=own-card-ADMIN_APPROVED_UNVERIFIED]") or "")
     assert page.is_visible("[data-testid=own-disclaimer]")
     assert page.is_visible("[data-testid=own-live-off]")  # read-only panel check is off by default
-    proven0, attested0 = _card(page, "PROVEN"), _card(page, "ADMIN_ATTESTED")
+    proven0, attested0 = _card(page, "PROVEN"), _card(page, "ADMIN_APPROVED_UNVERIFIED")
     assert proven0 > 0
     for tid in ("own-act-approve", "own-act-reject", "own-act-reset"):
         assert page.is_disabled(f"[data-testid={tid}]")
@@ -512,16 +512,16 @@ def test_bulk_ownership_review_approve_and_undo(ui, server, tmp_path):
     page.click("[data-testid=own-plan-commit]")
     page.wait_for_selector("[data-testid=own-plan-dialog]:not([open])", state="attached")
     page.wait_for_function(
-        f"() => document.querySelector('[data-testid=own-card-ADMIN_ATTESTED] .stat-value')?.dataset.value === '{attested0 + n}'")
+        f"() => document.querySelector('[data-testid=own-card-ADMIN_APPROVED_UNVERIFIED] .stat-value')?.dataset.value === '{attested0 + n}'")
     assert _card(page, "PROVEN") == proven0
     page.wait_for_selector("[data-testid=own-table] tbody td.empty")  # filter (PENDING) now empty
 
     # readiness shows the administrator's decisions beside (never inside) proven ownership
     page.click("[data-testid=nav-readiness]")
     page.wait_for_selector("[data-testid=readiness-admin-review]")
-    assert page.get_attribute("[data-testid=readiness-admin-admin_attested] .stat-value", "data-value") == str(attested0 + n)
+    assert page.get_attribute("[data-testid=readiness-admin-admin_approved_unverified] .stat-value", "data-value") == str(attested0 + n)
     assert page.get_attribute("[data-testid=readiness-admin-proven] .stat-value", "data-value") == str(proven0)
-    assert "اثبات نشده" in (page.text_content("[data-testid=readiness-admin-admin_attested]") or "")
+    assert "اثبات نشده" in (page.text_content("[data-testid=readiness-admin-admin_approved_unverified]") or "")
     page.click("[data-testid=nav-ownership]")
     page.wait_for_selector("[data-testid=own-batches] [data-testid=own-undo]")
 
@@ -534,11 +534,36 @@ def test_bulk_ownership_review_approve_and_undo(ui, server, tmp_path):
     page.click("[data-testid=own-plan-commit]")
     page.wait_for_selector("[data-testid=own-plan-dialog]:not([open])", state="attached")
     page.wait_for_function(
-        f"() => document.querySelector('[data-testid=own-card-ADMIN_ATTESTED] .stat-value')?.dataset.value === '{attested0}'")
+        f"() => document.querySelector('[data-testid=own-card-ADMIN_APPROVED_UNVERIFIED] .stat-value')?.dataset.value === '{attested0}'")
     assert _card(page, "PROVEN") == proven0
     assert page.locator("[data-testid=own-batches] [data-testid=own-undo]").count() == 0
 
     # audit chain verifies
     page.click("[data-testid=own-audit-verify]")
     page.wait_for_selector("[data-testid=own-audit-result][data-ok=true]")
+
+    # high-risk items (another user acted without a recorded transfer): separate filter value,
+    # separate high risk in the plan and a second, explicit acceptance before commit
+    page.select_option("[data-testid=own-f-eligibility]", "ATTESTABLE_HIGH_RISK")
+    page.select_option("[data-testid=own-f-review_state]", "PENDING")
+    page.click("[data-testid=own-apply]")
+    page.wait_for_function(
+        "() => { const r = [...document.querySelectorAll('[data-testid=own-table] tbody tr[data-key]')];"
+        " return r.length > 0 && r.every(x => x.dataset.eligibility === 'ATTESTABLE_HIGH_RISK'); }")
+    m = page.locator("[data-testid=own-table] tbody tr[data-key]").count()
+    page.click("[data-testid=own-select-filtered]")
+    page.click("[data-testid=own-act-approve]")
+    page.wait_for_selector("[data-testid=own-plan-dialog][open]")
+    assert page.locator("[data-testid=own-plan-risks] li[data-code=OWNER_MISMATCH_NO_TRANSFER]").count() == 1
+    assert page.is_visible("[data-testid=own-plan-highrisk-ack]")
+    page.fill("[data-testid=own-plan-count]", str(m))
+    page.check("[data-testid=own-plan-ack]")
+    assert page.is_disabled("[data-testid=own-plan-commit]")  # second acceptance still missing
+    page.check("[data-testid=own-plan-highrisk-ack]")
+    assert page.is_enabled("[data-testid=own-plan-commit]")
+    page.click("[data-testid=own-plan-commit]")
+    page.wait_for_selector("[data-testid=own-plan-dialog]:not([open])", state="attached")
+    page.wait_for_function(
+        f"() => document.querySelector('[data-testid=own-card-ADMIN_APPROVED_UNVERIFIED] .stat-value')?.dataset.value === '{attested0 + m}'")
+    assert _card(page, "PROVEN") == proven0
     probs.assert_clean()

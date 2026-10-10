@@ -13,12 +13,12 @@ disabled or deleted, and nothing is imported into NEXA.
 | Final class | Meaning | Who decides |
 |---|---|---|
 | `PROVEN` | ownership proven by the converter (`CONFIRMED_CURRENT_OWNER`, `CONFIRMED_TRANSFER`, `NO_CONFLICT`) | evidence |
-| `ADMIN_ATTESTED` | ambiguous service whose **invoice owner** (`invoice.id_user`) the administrator explicitly accepted | administrator |
+| `ADMIN_APPROVED_UNVERIFIED` | ambiguous service whose **invoice owner** (`invoice.id_user`) the administrator explicitly accepted; stored with this status (review state and class), never as proven | administrator |
 | `PENDING` | ambiguous, attestable, not decided yet | — |
 | `REJECTED` | administrator sent the service to quarantine (proven or not) | administrator |
 | `QUARANTINED` | no valid owner or a serious conflict; **cannot be approved here**, never gets an arbitrary owner | system |
 
-`ADMIN_ATTESTED` is never counted as proven: the readiness report, the summary, the export and
+`ADMIN_APPROVED_UNVERIFIED` is never counted as proven: the readiness report, the summary, the export and
 the importer contract all carry it as a separate class (`basis: ADMIN_ATTESTATION`).
 
 ### Eligibility (computed from the ownership record)
@@ -27,10 +27,16 @@ the importer contract all carry it as a separate class (`basis: ADMIN_ATTESTATIO
 * `ATTESTABLE` — `AMBIGUOUS_OWNER` **and** the invoice owner exists in `user` and is imported
   **and** no reason is serious. Only the invoice owner can be accepted; no other account can be
   chosen.
-* `QUARANTINE_ONLY` — `ORPHAN_OWNER`, `INVALID_OWNER`, no invoice, invoice owner not importable,
+* `ATTESTABLE_HIGH_RISK` — as `ATTESTABLE`, but another user acted on the service with no recorded
+  transfer (`OWNERSHIP_OWNER_MISMATCH_NO_TRANSFER_RECORD`; owner decision, Phase 3 review). It is a
+  separate filter value and a separate, high-severity risk (`OWNER_MISMATCH_NO_TRANSFER`) in the
+  plan; a commit that includes such items requires a **second, explicit acceptance**
+  (`accept_risks: ["OWNER_MISMATCH_NO_TRANSFER"]`, a separate tick in the UI), which is recorded in the
+  audited batch event. The result is still only `ADMIN_APPROVED_UNVERIFIED` for the invoice owner.
+* `QUARANTINE_ONLY` (forced quarantine; no administrator action can approve it) — `ORPHAN_OWNER`, `INVALID_OWNER`, no invoice, invoice owner not importable,
   or any serious reason:
   `OWNERSHIP_MULTIPLE_CLAIMANTS`, `OWNERSHIP_USERNAME_SHARED_BY_INVOICES`,
-  `OWNERSHIP_TRANSFER_NOT_APPLIED_TO_INVOICE` (the log names a different owner),
+  `OWNERSHIP_TRANSFER_NOT_APPLIED_TO_INVOICE` (a proven transfer names a different owner),
   `OWNERSHIP_TRANSFER_TARGET_INVALID`, `OWNERSHIP_OWNER_ID_INVALID`,
   `OWNERSHIP_OWNER_NOT_IN_USER_TABLE`, `OWNERSHIP_NO_INVOICE_FOR_USERNAME`.
 
@@ -109,7 +115,7 @@ proven ownership.
 | GET | `/items` | filtered page; query `panel`, `status_class`, `reason`, `review_state`, `live_status`, `eligibility` (comma-separated), `q` (invoice key prefix), `offset`, `limit` ≤ 500 |
 | GET | `/items/{key}` | detail with evidence summary; marks the item as viewed |
 | POST | `/plan` | `{action: APPROVE\|REJECT\|RESET\|UNDO, selection: {mode: keys, keys} \| {mode: filter, filter, exclude_keys} \| {mode: batch, batch_id}, note}` |
-| POST | `/commit` | `{plan_id, confirm_count, acknowledge: true}` |
+| POST | `/commit` | `{plan_id, confirm_count, acknowledge: true, accept_risks: [...]}` (`accept_risks` = the plan's `explicit_acceptance_required`) |
 | GET | `/batches` | committed batches |
 | GET | `/audit` | audit events (`offset`, `limit`) |
 | GET | `/audit/verify` | hash-chain verification |

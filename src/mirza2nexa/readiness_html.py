@@ -211,7 +211,7 @@ def render_readiness_html(readiness: dict[str, Any]) -> str:
     ar = _d(own.get("admin_review"))
     if ar:
         a("<h3>بررسی مدیر (جدا از مالکیت اثبات‌شده)</h3>")
-        rows = [("proven", "مالکیت اثبات‌شده"), ("admin_attested", "تأیید مدیر (اثبات نشده)"),
+        rows = [("proven", "مالکیت اثبات‌شده"), ("admin_approved_unverified", "تأیید مدیر (اثبات نشده)"),
                 ("pending", "در انتظار تصمیم"), ("rejected", "رد شده — قرنطینه"), ("quarantined", "قرنطینه سیستمی"),
                 ("stale", "تصمیم‌های منسوخ")]
         body = "".join(f'<dt>{_e(fa)} <span class="code">{_e(k)}</span></dt><dd>{_n(ar.get(k)) or "—"}</dd>'

@@ -6,7 +6,7 @@ administrator settle the remaining ambiguous services in bulk, with four guarant
 * An administrator can only accept the owner recorded on the Mirza invoice (``invoice.id_user``);
   no other account can ever be chosen here.
 * Services without a valid owner, or with a serious conflict, stay quarantined (cannot be approved).
-* Administrator decisions (``ADMIN_ATTESTED``) are kept apart from proven ownership in every
+* Administrator decisions (``ADMIN_APPROVED_UNVERIFIED``) are kept apart from proven ownership in every
   summary and in the export, so nothing reports them as proven.
 * Bulk changes are two-phase (plan → confirmed commit), idempotent, audited with a hash chain,
   reversible until the decisions are sealed for the final import.
@@ -51,10 +51,16 @@ SERIOUS_REASONS = frozenset({
     "OWNERSHIP_NO_INVOICE_FOR_USERNAME",
 })
 
-PROVEN, ATTESTABLE, QUARANTINE_ONLY = "PROVEN", "ATTESTABLE", "QUARANTINE_ONLY"
-PENDING, APPROVED, REJECTED = "PENDING", "APPROVED", "REJECTED"
-FINAL_CLASSES = ("PROVEN", "ADMIN_ATTESTED", "PENDING", "REJECTED", "QUARANTINED")
-BASIS = {"PROVEN": "EVIDENCE", "ADMIN_ATTESTED": "ADMIN_ATTESTATION", "PENDING": "NONE",
+# Attestable, but another user acted on the service with no recorded transfer: the administrator may
+# still accept the invoice owner, only with a second, explicit acceptance of this specific risk.
+HIGH_RISK_REASONS = frozenset({"OWNERSHIP_OWNER_MISMATCH_NO_TRANSFER_RECORD"})
+RISK_OWNER_MISMATCH = "OWNER_MISMATCH_NO_TRANSFER"
+
+PROVEN, ATTESTABLE, ATTESTABLE_HIGH_RISK, QUARANTINE_ONLY = (
+    "PROVEN", "ATTESTABLE", "ATTESTABLE_HIGH_RISK", "QUARANTINE_ONLY")
+PENDING, APPROVED, REJECTED = "PENDING", "ADMIN_APPROVED_UNVERIFIED", "REJECTED"
+FINAL_CLASSES = ("PROVEN", "ADMIN_APPROVED_UNVERIFIED", "PENDING", "REJECTED", "QUARANTINED")
+BASIS = {"PROVEN": "EVIDENCE", "ADMIN_APPROVED_UNVERIFIED": "ADMIN_ATTESTATION", "PENDING": "NONE",
          "REJECTED": "ADMIN_REJECTION", "QUARANTINED": "SYSTEM_QUARANTINE"}
 ACTIONS = ("APPROVE", "REJECT", "RESET", "UNDO")
 LIVE_STATUSES = ("NOT_CHECKED", "LIVE_ACTIVE", "LIVE_DISABLED", "LIVE_LIMITED", "LIVE_EXPIRED", "LIVE_ON_HOLD",
@@ -91,7 +97,7 @@ def record_reasons(rec: dict[str, Any]) -> list[str]:
 
 
 def eligibility(rec: dict[str, Any]) -> str:
-    """PROVEN / ATTESTABLE / QUARANTINE_ONLY for one ``legacy_service_ownership`` record (docs §1)."""
+    """PROVEN / ATTESTABLE / ATTESTABLE_HIGH_RISK / QUARANTINE_ONLY for one ownership record (docs §1)."""
     decision = rec.get("ownership_decision")
     if decision in PROVEN_DECISIONS:
         return PROVEN
@@ -101,8 +107,11 @@ def eligibility(rec: dict[str, Any]) -> str:
     if not (cand.get("telegram_user_id") and cand.get("in_user_table") is True
             and cand.get("customer_decision") == "IMPORT"):
         return QUARANTINE_ONLY
-    if any(r in SERIOUS_REASONS for r in record_reasons(rec)):
+    reasons = record_reasons(rec)
+    if any(r in SERIOUS_REASONS for r in reasons):
         return QUARANTINE_ONLY
+    if any(r in HIGH_RISK_REASONS for r in reasons):
+        return ATTESTABLE_HIGH_RISK
     return ATTESTABLE
 
 
@@ -149,7 +158,7 @@ SELECT i.key, i.invoice_key, i.decision, i.confidence, i.reasons, i.eligibility,
        CASE WHEN i.eligibility = 'QUARANTINE_ONLY' THEN 'QUARANTINED'
             WHEN r.binding = i.binding AND r.state = 'REJECTED' THEN 'REJECTED'
             WHEN i.eligibility = 'PROVEN' THEN 'PROVEN'
-            WHEN r.binding = i.binding AND r.state = 'APPROVED' THEN 'ADMIN_ATTESTED'
+            WHEN r.binding = i.binding AND r.state = 'ADMIN_APPROVED_UNVERIFIED' THEN 'ADMIN_APPROVED_UNVERIFIED'
             ELSE 'PENDING' END AS final_class
 FROM items i LEFT JOIN review r ON r.key = i.key LEFT JOIN live l ON l.key = i.key
      LEFT JOIN viewed w ON w.key = i.key
@@ -196,6 +205,7 @@ class Plan:
     changes: list[tuple[str, str, str, str, str | None]]  # key, from_state, to_state, binding, batch before
     snapshot: str
     undo_of: str | None = None
+    required_acceptance: list[str] = field(default_factory=list)
     result: dict[str, Any] | None = None
     preview: dict[str, Any] = field(default_factory=dict)
 
@@ -371,7 +381,7 @@ class ReviewStore:
             stale = self._db.execute("SELECT COUNT(*) FROM v WHERE stale").fetchone()[0]
             viewed = self._db.execute("SELECT COUNT(*) FROM v WHERE viewed").fetchone()[0]
             live = dict(self._db.execute("SELECT live_status, COUNT(*) FROM v GROUP BY live_status").fetchall())
-            attestable = self._db.execute("SELECT COUNT(*) FROM v WHERE eligibility = 'ATTESTABLE'").fetchone()[0]
+            attestable = self._db.execute("SELECT COUNT(*) FROM v WHERE eligibility IN ('ATTESTABLE', 'ATTESTABLE_HIGH_RISK')").fetchone()[0]
             sealed_at = self._meta("sealed_at")
             head = self._head()
         return {
@@ -381,8 +391,8 @@ class ReviewStore:
             "sealed_at": int(sealed_at) if sealed_at else None,
             "totals": {"items": n_items, **totals},
             "proven": totals["PROVEN"],
-            "admin_attested": totals["ADMIN_ATTESTED"],
-            "admin_attested_is_proof": False,
+            "admin_approved_unverified": totals["ADMIN_APPROVED_UNVERIFIED"],
+            "admin_approved_unverified_is_proof": False,
             "attestable": attestable,
             "stale": stale,
             "sealed_divergence": int(self._meta("sealed_divergence") or 0),
@@ -493,6 +503,11 @@ class ReviewStore:
                     risk_rows.append(r[:10])
             risks = _risks(action, risk_rows, sum(not_eligible.values()),
                            stale=sum(1 for r in risk_rows if r[8]))
+            high_risk = sum(1 for r in risk_rows if r[1] == ATTESTABLE_HIGH_RISK) if action == "APPROVE" else 0
+            if high_risk:
+                risks.insert(0, {"code": RISK_OWNER_MISMATCH, "count": high_risk, "severity": "high",
+                                 "requires_explicit_acceptance": True})
+            explicit = [RISK_OWNER_MISMATCH] if high_risk else []
             by_reason: dict[str, int] = {}
             for r in risk_rows:
                 for code in json.loads(r[9] or "[]"):
@@ -510,12 +525,15 @@ class ReviewStore:
                 "not_eligible": {"total": sum(not_eligible.values()), "by_reason": dict(sorted(not_eligible.items()))},
                 "risks": risks,
                 "applicable_by_reason": dict(sorted(by_reason.items())),
+                "high_risk_items": high_risk,
+                "explicit_acceptance_required": explicit,
                 "unreviewed": {"count": len(unviewed), "samples": [s for s in samples if s]},
                 "confirm": {"required_count": len(changes)},
-                "result_class": {"APPROVE": "ADMIN_ATTESTED", "REJECT": "REJECTED", "RESET": "PENDING",
+                "result_class": {"APPROVE": "ADMIN_APPROVED_UNVERIFIED", "REJECT": "REJECTED", "RESET": "PENDING",
                                  "UNDO": None}[action],
                 "admin_attestation_is_proof": False,
             }
+            plan.required_acceptance = explicit
             self._plans[plan.plan_id] = plan
             return plan.preview
 
@@ -527,7 +545,8 @@ class ReviewStore:
             self._plans.pop(min(self._plans, key=lambda p: self._plans[p].created_at))
 
     # ---- commit -------------------------------------------------------------------------
-    def commit(self, plan_id: str, *, confirm_count: Any, acknowledge: Any) -> dict[str, Any]:
+    def commit(self, plan_id: str, *, confirm_count: Any, acknowledge: Any,
+               accept_risks: Any = None) -> dict[str, Any]:
         with self._lock:
             plan = self._plans.get(plan_id) if isinstance(plan_id, str) else None
             if plan is not None and plan.result is not None:  # idempotent replay
@@ -550,6 +569,12 @@ class ReviewStore:
                     or confirm_count != len(plan.changes):
                 raise ReviewError("تعداد واردشده با تعداد مواردی که تغییر می‌کنند برابر نیست.",
                                   code="ownership.confirm_mismatch")
+            accepted = accept_risks if isinstance(accept_risks, list) else []
+            missing = [r for r in plan.required_acceptance if r not in accepted]
+            if missing:
+                raise ReviewError("این دسته شامل سرویس‌هایی است که کاربر دیگری بدون ثبت انتقال روی آن‌ها اقدام کرده؛ "
+                                  "برای اجرا باید این ریسک را جداگانه و صریح بپذیرید.",
+                                  code="ownership.risk_not_accepted", detail=",".join(missing))
             batch_id = "b-" + hashlib.sha256((self.import_id + plan.plan_id).encode()).hexdigest()[:16]
             now = _now()
             # All checks that depend on stored state run inside the write transaction, so a second
@@ -571,7 +596,8 @@ class ReviewStore:
                                  " superseded, undo_of, selection) VALUES (?,?,?,?,?,?,?,?,?,?)",
                                  (batch_id, plan.plan_id, plan.action, plan.note, now, len(plan.changes),
                                   plan.preview["unchanged"], plan.preview["superseded"], plan.undo_of,
-                                  json.dumps(plan.selection, ensure_ascii=False, sort_keys=True)))
+                                  json.dumps({**plan.selection, "accepted_risks": plan.required_acceptance},
+                                             ensure_ascii=False, sort_keys=True)))
                 self._db.executemany(
                     "INSERT INTO review (key, state, batch_id, binding, updated_at) VALUES (?,?,?,?,?)"
                     " ON CONFLICT(key) DO UPDATE SET state=excluded.state, batch_id=excluded.batch_id,"
@@ -580,8 +606,12 @@ class ReviewStore:
                 events = [{"action": plan.action, "batch_id": batch_id, "key": key, "from_state": frm,
                            "to_state": to, "binding": bind, "note": None}
                           for key, frm, to, bind, _b in plan.changes]
+                batch_note = plan.note
+                if plan.required_acceptance:  # the explicit risk acceptance is part of the audited record
+                    batch_note = json.dumps({"note": plan.note, "accepted_risks": plan.required_acceptance},
+                                            ensure_ascii=False, sort_keys=True)
                 events.append({"action": "BATCH_" + plan.action, "batch_id": batch_id, "key": None,
-                               "from_state": None, "to_state": None, "binding": None, "note": plan.note})
+                               "from_state": None, "to_state": None, "binding": None, "note": batch_note})
                 self._append_audit(seq, head, now, events)
                 self._db.executemany("INSERT INTO batch_items (batch_id, key, from_state, to_state) VALUES (?,?,?,?)",
                                      [(batch_id, k, f, t) for k, f, t, _bind, _b in plan.changes])

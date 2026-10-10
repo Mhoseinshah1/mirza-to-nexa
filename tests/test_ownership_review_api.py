@@ -162,7 +162,7 @@ def api(tmp_path):
 def test_review_flow_over_http(api):
     client, manager, h, base = api
     s0 = client.get(base + "/summary").json()
-    assert s0["totals"]["items"] > 0 and s0["admin_attested_is_proof"] is False
+    assert s0["totals"]["items"] > 0 and s0["admin_approved_unverified_is_proof"] is False
     assert s0["live"]["enabled"] is False
     facets = client.get(base + "/facets").json()
     assert {"panel", "status_class", "reason", "review_state", "live_status", "eligibility", "final_class"} <= set(facets)
@@ -186,14 +186,14 @@ def test_review_flow_over_http(api):
                                              "acknowledge": True}, headers=h).json()
     assert ok["applied"] == attestable
     s1 = client.get(base + "/summary").json()
-    assert s1["totals"]["ADMIN_ATTESTED"] == attestable and s1["totals"]["PROVEN"] == s0["totals"]["PROVEN"]
+    assert s1["totals"]["ADMIN_APPROVED_UNVERIFIED"] == attestable and s1["totals"]["PROVEN"] == s0["totals"]["PROVEN"]
 
     # readiness keeps administrator decisions apart from proven ownership
     job_base = base.rsplit("/ownership", 1)[0]
     rd = client.get(job_base + "/readiness").json()
     ar = rd["ownership"]["admin_review"]
-    assert ar["admin_attested"] == attestable and ar["proven"] == s0["totals"]["PROVEN"]
-    assert ar["admin_attested_is_proof"] is False
+    assert ar["admin_approved_unverified"] == attestable and ar["proven"] == s0["totals"]["PROVEN"]
+    assert ar["admin_approved_unverified_is_proof"] is False
 
     batches = client.get(base + "/batches").json()["items"]
     assert batches[0]["batch_id"] == ok["batch_id"]
@@ -202,7 +202,7 @@ def test_review_flow_over_http(api):
                        headers=h).json()
     client.post(base + "/commit", json={"plan_id": undo["plan_id"], "confirm_count": undo["applicable"],
                                         "acknowledge": True}, headers=h)
-    assert client.get(base + "/summary").json()["totals"]["ADMIN_ATTESTED"] == 0
+    assert client.get(base + "/summary").json()["totals"]["ADMIN_APPROVED_UNVERIFIED"] == 0
     assert client.get(base + "/audit/verify").json()["ok"] is True
     assert client.get(base + "/audit", params={"limit": 5}).json()["total"] >= 2 * attestable
 
@@ -245,7 +245,7 @@ def test_live_check_disabled_by_default_then_read_only(api, panel):
     items = client.get(base + "/items", params={"panel": "syn-a", "live_status": "LIVE_ACTIVE"}).json()
     assert items["total"] >= 1
     # live status is a risk signal in the plan, never a change of ownership class
-    assert s["totals"]["ADMIN_ATTESTED"] == 0
+    assert s["totals"]["ADMIN_APPROVED_UNVERIFIED"] == 0
 
 
 def test_dot_usernames_and_cleartext_logins_are_refused(panel):
