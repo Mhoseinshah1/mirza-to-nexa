@@ -50,6 +50,19 @@ CODES: dict[str, tuple[str, str]] = {
     # ownership
     "SERVICE_OWNER_CONFLICT": ("ownership_transfer", OWNER_DECISION),
     "AMBIGUOUS_OWNERSHIP": ("ownership_transfer", ADOPTION_TIME),
+    # ownership model (modules/ownership.py, docs/OWNERSHIP.md)
+    "OWNERSHIP_OWNER_ID_INVALID": ("invalid_owner", OWNER_DECISION),
+    "OWNERSHIP_OWNER_NOT_IN_USER_TABLE": ("invalid_owner", OWNER_DECISION),
+    "OWNERSHIP_MULTIPLE_CLAIMANTS": ("ownership_transfer", OWNER_DECISION),
+    "OWNERSHIP_USERNAME_SHARED_BY_INVOICES": ("ownership_transfer", OWNER_DECISION),
+    "OWNERSHIP_TRANSFER_ORDER_UNPROVEN": ("ownership_transfer", OWNER_DECISION),
+    "OWNERSHIP_TRANSFER_TARGET_INVALID": ("ownership_transfer", OWNER_DECISION),
+    "OWNERSHIP_TRANSFER_CHAIN_BROKEN": ("ownership_transfer", OWNER_DECISION),
+    "OWNERSHIP_TRANSFER_NOT_APPLIED_TO_INVOICE": ("ownership_transfer", OWNER_DECISION),
+    "OWNERSHIP_ACTION_OUTSIDE_HOLDING_WINDOW": ("ownership_transfer", OWNER_DECISION),
+    "OWNERSHIP_ACTOR_NOT_IN_USER_TABLE": ("ownership_transfer", OWNER_DECISION),
+    "OWNERSHIP_OWNER_MISMATCH_NO_TRANSFER_RECORD": ("ownership_transfer", OWNER_DECISION),
+    "OWNERSHIP_NO_INVOICE_FOR_USERNAME": ("ownership_transfer", ARCHIVE_ONLY),
     # owners / identities
     "ORPHAN": ("invalid_owner", OWNER_DECISION),
     "CUSTOMER_NOT_IMPORTED": ("invalid_owner", RESOLVABLE_BY_CODE),

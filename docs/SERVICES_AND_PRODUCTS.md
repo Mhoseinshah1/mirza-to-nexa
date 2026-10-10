@@ -1,5 +1,7 @@
 # Services, panels, products and categories (module `services_ext`)
 
+> Service ownership (who owns each service, transfer chains, the `SERVICE_OWNER_CONFLICT` reasons) is decided by the `ownership` model: see `OWNERSHIP.md`. Panel/product adoption inputs: `PANELS_AND_ADOPTION.md`, `PRODUCTS_MAPPING.md`.
+
 This page covers how these Mirza tables migrate:
 
 * `service_other`, `cancel_service` and `manualsell`;

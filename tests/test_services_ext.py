@@ -56,6 +56,13 @@ def _so_rows(rows: list[tuple]) -> str:
         (f"INSERT INTO `service_other` VALUES {vals};\n" if rows else "")
 
 
+def _not_ownership_scenario(o: dict) -> bool:
+    """Rows appended by the ownership synth hook (ids >= SCENARIO_BASE_ID) are tested in test_ownership.py."""
+    from mirza2nexa.modules.ownership import SCENARIO_BASE_ID
+
+    return o["legacy_id"] is None or not o["legacy_id"].isdigit() or int(o["legacy_id"]) < SCENARIO_BASE_ID
+
+
 def _invoice_of(res, username: str) -> dict:
     return next(r for r in records(res, "invoices") if r.get("panel_account_username", r.get("username")) == username)
 
@@ -83,7 +90,7 @@ def test_service_other_relates_to_invoices_by_username(default):
         assert o["provenance"]["source_table"] == "service_other"
         if o["invoice_relation"]["state"] == "FOUND":
             assert o["invoice_relation"]["invoice_key"]
-        if o["owner_relation"] == "MATCHES_INVOICE":
+        if o["owner_relation"] == "MATCHES_INVOICE" and _not_ownership_scenario(o):
             assert o["owner"]["customer_decision"] == "IMPORT"
     assert len({o["idempotency_key"] for o in ops}) == len(ops)
 
@@ -105,13 +112,16 @@ def test_money_is_raw_and_never_applied(default):
 
 def test_owner_conflict_transfer_and_ambiguity(default):
     res, _ = default
-    ops = records(res, "service_operations")
+    all_ops = records(res, "service_operations")
+    ops = [o for o in all_ops if _not_ownership_scenario(o)]
     conflicts = [o for o in ops if o["owner_relation"] == "CONFLICT"]
     assert len(conflicts) == 1
-    rv = by_code(res, "SERVICE_OWNER_CONFLICT")
+    assert conflicts[0]["ownership_reason"] == "OWNERSHIP_OWNER_MISMATCH_NO_TRANSFER_RECORD"
+    rv = [r for r in by_code(res, "SERVICE_OWNER_CONFLICT")
+          if r["source_ref"]["table"] == "service_other" and r["source_ref"]["pk"] == conflicts[0]["legacy_id"]]
     assert len(rv) == 1 and rv[0]["severity"] == "blocker"
-    assert rv[0]["source_ref"] == {"table": "service_other", "pk": conflicts[0]["legacy_id"]}
-    assert res.report["reconciliation"]["service_operations"]["owner_conflicts"] == 1
+    assert res.report["reconciliation"]["service_operations"]["owner_conflicts"] == \
+        sum(o["owner_relation"] == "CONFLICT" for o in all_ops)
     # an op by the previous owner, explained by a recorded transfertouser row
     assert sum(o["owner_relation"] == "PREVIOUS_OWNER_VIA_TRANSFER" for o in ops) == 2
     # 'shared' is sold to two different owners (core AMBIGUOUS_OWNERSHIP); a third owner's op cannot be placed

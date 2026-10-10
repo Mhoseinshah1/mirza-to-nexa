@@ -37,6 +37,7 @@ from ..mapping import rules
 from ..synth import TG_BASE, SynthState, register_synth, sql_str
 from .base import Module, ModuleContext, register_module
 from .generic import export_rows
+from .ownership import ADMIN_ACTOR_TYPES, PAYER_TYPES, OwnershipModel, model_for
 
 MP = "mirza_pro@b645db74"
 BMP = "botmirzapanel@92c0ed06"
@@ -214,9 +215,8 @@ OP_TYPES: dict[str, tuple[str, bool]] = {
 }
 # Types whose service is, by definition, not in the bot's invoice list (lang/fa.php:2242).
 NOT_IN_LIST_TYPES = frozenset({"extends_not_user", "extra_not_user"})
-# Types whose id_user is the acting ADMIN, not the owner (MP admin.php:7646 binds $from_id = admin).
-# api/invoice.php:308 writes the owner instead, so the column is not an owner for this type at all.
-ADMIN_ACTOR_TYPES = frozenset({"extend_user_by_admin"})
+# ADMIN_ACTOR_TYPES (imported from .ownership, rule OWN-R5): id_user is the acting ADMIN, not the owner
+# (MP admin.php:7646 binds $from_id = admin; api/invoice.php:308 writes the owner instead).
 # What service_other.price means per type (docs/SOURCE_TABLES.md Q1 "Money").
 PRICE_SEMANTICS = {
     "extend_user": "PRODUCT_PRICE_CHARGED",              # MP index.php:1805,1879 ($prodcut['price_product'])
@@ -419,50 +419,25 @@ class _Invoices:
                 "candidates": len(cands), "matched_by": None, "_inv": None}
 
 
-class _Transfers:
-    """Ownership transfers recorded in service_other (type ``transfertouser``; MP index.php:2885-2904)."""
-
-    def __init__(self, ctx: ModuleContext, stats_list):
-        c = ctx.conn
-        c.execute("DROP TABLE IF EXISTS temp.sx_xfer")
-        c.execute("CREATE TEMP TABLE sx_xfer (uname TEXT, from_owner TEXT, to_owner TEXT)")
-        for stats in stats_list:
-            cols = stats.stored_columns
-            if not all(x in cols for x in ("type", "username", "id_user", "value")):
-                continue
-            rows = c.execute(f'SELECT c_username, c_id_user, c_value FROM "{stats.sql_name}" '  # noqa: S608
-                             "WHERE c_type = 'transfertouser'").fetchall()
-            c.executemany("INSERT INTO sx_xfer VALUES (?,?,?)",
-                          [(rules.panel_username(u), f, rules.js_trim(t) if t else t) for u, f, t in rows
-                           if rules.panel_username(u) is not None])
-        c.execute("CREATE INDEX temp.sx_xfer_u ON sx_xfer (uname)")
-        self.conn = c
-
-    def explains(self, username: str | None, op_owner: str | None, invoice_owner: str | None) -> bool:
-        u = rules.panel_username(username)
-        if u is None or op_owner is None or invoice_owner is None:
-            return False
-        rows = self.conn.execute("SELECT from_owner, to_owner FROM sx_xfer WHERE uname = ?", (u,)).fetchall()
-        owners = {x for r in rows for x in r if x is not None}
-        received = {r[1] for r in rows}
-        return op_owner in owners and invoice_owner in received
-
-
 def _owner(ctx: ModuleContext, raw: str | None) -> dict[str, Any]:
     decision = ctx.customer_decision(raw)
     return {"raw": raw, "telegram_user_id": rules.telegram_id(raw),
             "customer_decision": decision if decision is not None else "NOT_IN_BACKUP"}
 
 
-def _owner_relation(xfer: _Transfers, rel: dict[str, Any], username: str | None, owner: str | None) -> str:
+def _owner_relation(model: OwnershipModel, rel: dict[str, Any], table: str, rowno: int,
+                    owner: str | None) -> tuple[str, str | None]:
+    """Relation of a row's owner to its invoice owner (Phase 3 ownership model, docs/OWNERSHIP.md).
+
+    A mismatch is explained only by a proven transfer chain (OWN-R3/R4) or by a column that is not an
+    owner claim (OWN-R6 payer); anything else stays ``CONFLICT`` with an ``OWNERSHIP_*`` reason.
+    """
     inv = rel.get("_inv")
     if inv is None:
-        return "NO_INVOICE"
+        return "NO_INVOICE", None
     if inv[1] == owner:
-        return "MATCHES_INVOICE"
-    if xfer.explains(username, owner, inv[1]):
-        return "PREVIOUS_OWNER_VIA_TRANSFER"
-    return "CONFLICT"
+        return "MATCHES_INVOICE", None
+    return model.explain(table, rowno)
 
 
 def _public_rel(rel: dict[str, Any]) -> dict[str, Any]:
@@ -496,16 +471,15 @@ def _review(ctx: ModuleContext, code: str, entity: str, table: str, pk: str | No
 # service_other
 # --------------------------------------------------------------------------------------
 
-def _service_operations(ctx: ModuleContext, inv: _Invoices) -> _Transfers:
+def _service_operations(ctx: ModuleContext, inv: _Invoices, model: OwnershipModel) -> None:
     tables = _tables(ctx, "service_other")
-    stored = [t for t in tables if t.sql_name]
-    xfer = _Transfers(ctx, stored)
     if not tables:
-        return xfer
+        return
     sink = ctx.open("records/service_operations.jsonl")
     stats_out: dict[str, Any] = {
         "rows": 0, "records": 0, "by_type_raw": {}, "by_type": {}, "by_status": {}, "invoice_relation": {},
-        "owner_relation": {}, "owner_customer_decision": {}, "owner_conflicts": 0, "amount_unreadable": 0,
+        "owner_relation": {}, "owner_conflict_reasons": {}, "owner_customer_decision": {}, "owner_conflicts": 0,
+        "owner_conflicts_previous_rule": 0, "amount_unreadable": 0,
         "historical_amounts_minor": {}, "invalid_or_duplicate_ids": 0,
     }
     for stats in tables:
@@ -513,7 +487,7 @@ def _service_operations(ctx: ModuleContext, inv: _Invoices) -> _Transfers:
             continue
         keys = _Keys(ctx, "service-op", stats.name)
         n_ok = n_review = 0
-        for _rowno, r in ctx.rows(stats, order_by=["id"]):
+        for rowno, r in ctx.rows(stats, order_by=["id"]):
             ctx.tick()
             stats_out["rows"] += 1
             pk = r.get("id")
@@ -539,7 +513,9 @@ def _service_operations(ctx: ModuleContext, inv: _Invoices) -> _Transfers:
             # For admin renewals id_user may be the ADMIN (MP admin.php:7646); it is never read as the owner.
             owner_raw = None if admin_actor else actor_raw
             owner = _owner(ctx, actor_raw)
-            owner["role"] = "ACTOR_ADMIN_OR_OWNER_UNPROVEN" if admin_actor else "OWNER"
+            # extends_not_user: the payer of a renewal looked up by panel username (ownership rule OWN-R6)
+            owner["role"] = "ACTOR_ADMIN_OR_OWNER_UNPROVEN" if admin_actor else \
+                "PAYER_NOT_OWNER_CLAIM" if type_raw in PAYER_TYPES else "OWNER"
             if not admin_actor and owner["customer_decision"] == "NOT_IN_BACKUP":
                 codes.append(("SERVICE_OP_OWNER_NOT_IN_BACKUP", "warning"))
             rel = inv.relate(r.get("username"), owner_raw)
@@ -547,16 +523,20 @@ def _service_operations(ctx: ModuleContext, inv: _Invoices) -> _Transfers:
                 codes.append(("SERVICE_OP_INVOICE_NOT_FOUND", "warning"))
             elif rel["state"] == "AMBIGUOUS":
                 codes.append(("SERVICE_OP_INVOICE_AMBIGUOUS", "blocker"))
-            orel = "NOT_AN_OWNER_FIELD" if admin_actor else _owner_relation(xfer, rel, r.get("username"), owner_raw)
+            orel, oreason = ("NOT_AN_OWNER_FIELD", None) if admin_actor else \
+                _owner_relation(model, rel, stats.name, rowno, owner_raw)
+            if model.legacy_is_conflict(stats.name, rowno):
+                stats_out["owner_conflicts_previous_rule"] += 1
             if orel == "CONFLICT":
                 stats_out["owner_conflicts"] += 1
+                stats_out["owner_conflict_reasons"][oreason] = stats_out["owner_conflict_reasons"].get(oreason, 0) + 1
                 codes.append(("SERVICE_OWNER_CONFLICT", "blocker"))
             amount["semantics"] = PRICE_SEMANTICS.get(type_raw or "", "UNKNOWN")
             for code, sev in codes:
                 _review(ctx, code, "service_operations", stats.name, pk, sev,
                         data={"type_raw": type_raw if norm != "UNKNOWN" else None, "invoice_relation": rel["state"],
                               "invoice_key": rel["invoice_key"], "owner_relation": orel,
-                              "candidates": rel["candidates"]})
+                              "ownership_reason": oreason, "candidates": rel["candidates"]})
             sink.write({
                 "record_type": "legacy_service_operation",
                 "schema": "mirza.service_other.v1",
@@ -568,6 +548,7 @@ def _service_operations(ctx: ModuleContext, inv: _Invoices) -> _Transfers:
                 "panel_account_username": r.get("username"),
                 "invoice_relation": _public_rel(rel),
                 "owner_relation": orel,
+                "ownership_reason": oreason,
                 "amount": amount,
                 "time": parse_time(r.get("time")),
                 "details": _value_details(ctx, r.get("value"), stats.name),
@@ -596,7 +577,7 @@ def _service_operations(ctx: ModuleContext, inv: _Invoices) -> _Transfers:
         ctx.count("service_operations", "source", n_ok + n_review)
         ctx.count("service_operations", "converted", n_ok + n_review)
     for bucket in ("by_type_raw", "by_type", "by_status", "invoice_relation", "owner_relation",
-                   "owner_customer_decision"):
+                   "owner_conflict_reasons", "owner_customer_decision"):
         stats_out[bucket] = dict(sorted(stats_out[bucket].items()))
     stats_out["historical_amounts_minor"] = {
         k: {"count": v["count"], "amount_minor": str(v["sum"])}
@@ -611,15 +592,15 @@ def _service_operations(ctx: ModuleContext, inv: _Invoices) -> _Transfers:
         ctx.warn("SERVICE_OPERATIONS_HISTORY_ONLY", message=WARNINGS["SERVICE_OPERATIONS_HISTORY_ONLY"])
     if stats_out["owner_conflicts"]:
         ctx.warn("SERVICE_OWNER_CONFLICTS", stats_out["owner_conflicts"], message=WARNINGS["SERVICE_OWNER_CONFLICTS"])
-    return xfer
 
 
 # --------------------------------------------------------------------------------------
 # cancel_service
 # --------------------------------------------------------------------------------------
 
-def _cancellations(ctx: ModuleContext, inv: _Invoices, xfer: _Transfers) -> dict[str, Any]:
+def _cancellations(ctx: ModuleContext, inv: _Invoices, model: OwnershipModel) -> dict[str, Any]:
     out: dict[str, Any] = {"rows": 0, "by_status": {}, "invoice_relation": {}, "owner_conflicts": 0,
+                           "owner_conflicts_previous_rule": 0, "owner_conflict_reasons": {},
                            "accepted_but_invoice_live": 0}
     tables = _tables(ctx, "cancel_service")
     if not tables:
@@ -630,7 +611,7 @@ def _cancellations(ctx: ModuleContext, inv: _Invoices, xfer: _Transfers) -> dict
             continue
         keys = _Keys(ctx, "cancel-service", stats.name)
         n_ok = n_review = 0
-        for _rowno, r in ctx.rows(stats, order_by=["id"]):
+        for rowno, r in ctx.rows(stats, order_by=["id"]):
             ctx.tick()
             out["rows"] += 1
             pk = r.get("id")
@@ -640,9 +621,12 @@ def _cancellations(ctx: ModuleContext, inv: _Invoices, xfer: _Transfers) -> dict
             status = CANCEL_STATUSES.get(r.get("status") or "", "UNKNOWN")
             owner_raw = r.get("id_user")
             rel = inv.relate(r.get("username"), owner_raw)
-            orel = _owner_relation(xfer, rel, r.get("username"), owner_raw)
+            orel, oreason = _owner_relation(model, rel, stats.name, rowno, owner_raw)
+            if model.legacy_is_conflict(stats.name, rowno):
+                out["owner_conflicts_previous_rule"] += 1
             if orel == "CONFLICT":
                 out["owner_conflicts"] += 1
+                out["owner_conflict_reasons"][oreason] = out["owner_conflict_reasons"].get(oreason, 0) + 1
                 codes.append(("SERVICE_OWNER_CONFLICT", "blocker"))
             live = rel["_inv"] is not None and rel["_inv"][3] in rules.LIVE_STATUSES
             if status == "ACCEPTED" and live:
@@ -651,7 +635,7 @@ def _cancellations(ctx: ModuleContext, inv: _Invoices, xfer: _Transfers) -> dict
             for code, sev in codes:
                 _review(ctx, code, "service_requests", stats.name, pk, sev,
                         data={"invoice_relation": rel["state"], "invoice_key": rel["invoice_key"],
-                              "owner_relation": orel, "status": status})
+                              "owner_relation": orel, "ownership_reason": oreason, "status": status})
             desc = r.get("description")
             sink.write({
                 "record_type": "legacy_service_cancellation_request",
@@ -662,6 +646,7 @@ def _cancellations(ctx: ModuleContext, inv: _Invoices, xfer: _Transfers) -> dict
                 "panel_account_username": r.get("username"),
                 "invoice_relation": _public_rel(rel),
                 "owner_relation": orel,
+                "ownership_reason": oreason,
                 "status": {"raw": r.get("status"), "normalized": status},
                 # '0' is the placeholder written at creation (MP index.php:2766)
                 "admin_note": None if desc in (None, "0") else ctx.redact(desc, stats.name),
@@ -683,6 +668,7 @@ def _cancellations(ctx: ModuleContext, inv: _Invoices, xfer: _Transfers) -> dict
         ctx.count("service_requests", "converted", n_ok + n_review)
     out["by_status"] = dict(sorted(out["by_status"].items()))
     out["invoice_relation"] = dict(sorted(out["invoice_relation"].items()))
+    out["owner_conflict_reasons"] = dict(sorted(out["owner_conflict_reasons"].items()))
     return out
 
 
@@ -1034,8 +1020,9 @@ def _vs_tables(ctx: ModuleContext) -> dict[str, int]:
 
 def run(ctx: ModuleContext) -> None:
     inv = _Invoices(ctx)
-    xfer = _service_operations(ctx, inv)
-    cancels = _cancellations(ctx, inv, xfer)
+    model = model_for(ctx)
+    _service_operations(ctx, inv, model)
+    cancels = _cancellations(ctx, inv, model)
     manual = _manual_inventory(ctx, inv)
     panels = _panels(ctx, inv, manual)
     cats = _categories(ctx)
@@ -1047,8 +1034,7 @@ def run(ctx: ModuleContext) -> None:
     ctx.reconciliation("panel_registry", panels)
     ctx.reconciliation("category_catalogue", cats)
     ctx.reconciliation("services_ext_review_tables", {"vs_tables": vs})
-    for t in ("sx_inv", "sx_xfer"):
-        ctx.conn.execute(f"DROP TABLE IF EXISTS temp.{t}")
+    ctx.conn.execute("DROP TABLE IF EXISTS temp.sx_inv")
     ctx.mapping({"entity": "service_operations", "source_table": "service_other",
                  "source_columns": [c.name for c in SERVICE_OTHER_COLUMNS if c.storable],
                  "target": "records/service_operations.jsonl (history; never applied)", "status": "partial",
