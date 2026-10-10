@@ -123,3 +123,22 @@ def test_fresh_processes_are_repeatable_and_cover_phase2_tables(tmp_path):
     assert cov["Payment_report"]["archived"] == cov["Payment_report"]["rows"]
     assert cov["wallet_transaction"]["archived"] == cov["wallet_transaction"]["rows"]
     assert results[0]["catalogue"]["ok"] is True
+
+
+def test_expected_tables_match_evidence_and_catalogue():
+    """EXPECTED_TABLES must not drift from the evidence catalogue or the registered specs."""
+    from mirza2nexa.catalogue import CATALOGUE
+    from mirza2nexa.modules import EXPECTED_TABLES
+
+    evidence = {t["table"] for t in json.loads((ROOT / "docs/evidence/mirza_tables.json").read_text(encoding="utf-8"))}
+    assert EXPECTED_TABLES == evidence | {"protocol"}
+    assert set(CATALOGUE.specs) == set(EXPECTED_TABLES)
+
+
+def test_missing_module_gives_clear_selfcheck_json(tmp_path):
+    proc = subprocess.run([sys.executable, "-I", "-c", _BLOCK_PAYMENTS, "selfcheck"], capture_output=True,
+                          text=True, env=_env(tmp_path), timeout=120)
+    assert proc.returncode == 3
+    status = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert status["ok"] is False and status["missing_modules"] == ["mirza2nexa.modules.payments"]
+    assert "catalogue.incomplete" in proc.stderr and "Traceback" not in proc.stderr

@@ -97,6 +97,10 @@ def convert(cmd_prefix: list[str], zip_path: Path, out: Path, env: dict[str, str
               f"{label} verify")
     manifest = last_json(ver.stdout, f"{label} verify")
     check(manifest.get("ok") is True, f"{label}: package verify not ok: {manifest}")
+    if cmd_prefix[0] != sys.executable:  # also exercise the frozen binary's own verify path
+        ver_exe = run(cmd_prefix + ["verify", str(pkgs[0]), "--key-file", str(keys[0])], env, f"{label} exe verify")
+        check(last_json(ver_exe.stdout, f"{label} exe verify") == manifest,
+              f"{label}: exe verify output differs from python verify")
     return report, manifest
 
 
@@ -177,6 +181,11 @@ def compare(left: dict, right: dict, what: str) -> None:
 
 
 def main() -> int:
+    for stream in (sys.stdout, sys.stderr):  # Windows CI pipes default to cp1252; diagnostics may be Persian
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("exe")
     ap.add_argument("--users", type=int, default=1000)

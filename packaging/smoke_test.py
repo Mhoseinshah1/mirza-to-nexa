@@ -30,6 +30,11 @@ def selfcheck(exe: str) -> bool:
 
 
 def main() -> int:
+    for stream in (sys.stdout, sys.stderr):  # Windows CI pipes default to cp1252
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
     exe = sys.argv[1]
     if not selfcheck(exe):
         return 1

@@ -70,8 +70,41 @@ def serve(port: int | None = None, open_browser: bool = True, launch_token: str 
         manager.shutdown()
 
 
+def _registry_load_error(argv: list[str]) -> int | None:
+    """Load every converter module up front; on failure explain it clearly and exit 3.
+
+    This does not hide anything: the app stops. It only replaces a raw traceback (or a console
+    window that flashes and closes) with a Persian explanation and machine-readable JSON.
+    """
+    try:
+        from . import modules  # noqa: F401
+    except ImportError as exc:
+        import json
+
+        missing = getattr(exc, "name", None) or str(exc)
+        msg = ("کاتالوگ جدول‌های میرزا در این نسخه برنامه کامل بارگذاری نشده است (ماژول گم‌شده: "
+               f"{missing})؛ تبدیل انجام نمی‌شود. نسخه برنامه را دوباره دریافت و نصب کنید.")
+        if argv and argv[0] == "selfcheck":
+            from . import __version__
+
+            print(json.dumps({"version": __version__, "ok": False, "missing_modules": [missing],
+                              "missing_tables": [], "error": "catalogue.incomplete"}, ensure_ascii=False))
+        print(f"error [catalogue.incomplete]: {msg}", file=sys.stderr)
+        if getattr(sys, "frozen", False) and not argv and sys.stdin and sys.stdin.isatty():
+            try:
+                input("برای بستن Enter بزنید…")
+            except EOFError:
+                pass
+        return 3
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    _utf8_console()
+    failed = _registry_load_error(argv)
+    if failed is not None:
+        return failed
     if argv and argv[0] in {"convert", "verify", "compare", "synth", "selfcheck"}:
         from .cli import main as cli_main
 
