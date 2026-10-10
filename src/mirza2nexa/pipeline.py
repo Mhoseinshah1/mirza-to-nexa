@@ -175,17 +175,19 @@ def _convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
     from .source_snapshot import SnapshotCollector
 
     snapshot = SnapshotCollector(workspace / "snapshot.sqlite")
+    # Any failure before the snapshot is written (staging, schema detection) must release the
+    # SQLite handle first: Windows cannot delete an open file during plaintext cleanup.
     try:
         staged = stage_dumps([e.path for e in extracted], db_path, cancel=cancel, progress=progress,
                              observer=snapshot)
+        if opts.delete_sql_after_parse:
+            for e in extracted:
+                e.path.unlink(missing_ok=True)
+        profile = detect_profile(staged.tables)
+        fingerprint = source_fingerprint(staged.tables, profile)
     except BaseException:
         snapshot.close()
         raise
-    if opts.delete_sql_after_parse:
-        for e in extracted:
-            e.path.unlink(missing_ok=True)
-    profile = detect_profile(staged.tables)
-    fingerprint = source_fingerprint(staged.tables, profile)
     import_id = _import_id(fingerprint, opts.money_unit)
 
     stage("convert", None)

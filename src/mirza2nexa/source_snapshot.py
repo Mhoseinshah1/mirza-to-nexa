@@ -421,7 +421,10 @@ class SnapshotCollector:
             self._flush(t)
 
     def close(self) -> None:
-        self.conn.close()
+        """Idempotent: closes the handle and removes the scratch file."""
+        if self.conn is not None:
+            self.conn.close()
+            self.conn = None  # type: ignore[assignment]
         self.db_path.unlink(missing_ok=True)
 
     # ---- output --------------------------------------------------------------------

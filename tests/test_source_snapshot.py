@@ -304,3 +304,26 @@ def test_catalog_charsets_from_table_and_column_clauses(tmp_path):
         ("a", "varchar", "latin1"), ("b", "text", "utf8mb3"), ("c", "int", None), ("d", "decimal", None),
         ("e", "varchar", "utf8mb4")]
     assert out["result"].table_files == {}
+
+
+def test_snapshot_handle_released_when_schema_detection_fails(tmp_path, monkeypatch):
+    """Windows cannot delete an open SQLite file: every failure after staging must close it first."""
+    from mirza2nexa.errors import MigrationError
+
+    states: list[bool] = []
+    real_close = ss.SnapshotCollector.close
+
+    def spy(self):
+        real_close(self)
+        states.append(self.conn is None)
+
+    monkeypatch.setattr(ss.SnapshotCollector, "close", spy)
+    sql = ("CREATE TABLE `user` (`id` varchar(500), `limit_usertest` int, `Balance` varchar(64));\n"
+           "INSERT INTO `user` VALUES ('7100000001',1,'100');\n")
+    zp = tmp_path / "bad.zip"
+    with zipfile.ZipFile(zp, "w") as zf:
+        zf.writestr("backup.sql", sql)
+    with pytest.raises(MigrationError):
+        run(tmp_path, zp)
+    assert states and states[0] is True
+    assert not (tmp_path / "ws" / "snapshot.sqlite").exists()
