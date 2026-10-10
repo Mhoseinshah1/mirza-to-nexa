@@ -269,3 +269,126 @@ and 17,691 `wallet_transaction` rows.
 * Never write to `wallet_entries`, `payments`, `payment_receipts`, orders or revenue reports. Never use a row to adjust a balance, settle a debt or trigger a service. The `MIGRATION_OPENING_BALANCE` credit comes from `user.Balance` alone.
 * Customer link: use `customer.telegram_user_id` only when `relation = CUSTOMER_IMPORTED`. Otherwise store the raw `source_user_id` and leave the link NULL.
 * Show the records to operators as history in customer support views. Only codes and counts appear in dashboards; `receipt_trace` and free text never do.
+
+---
+
+## 5. Phase 3: difference analysis (`records/wallet_difference_analysis.jsonl`)
+
+**Question.** Why does a customer's `wallet_transaction` history end somewhere other than the
+snapshot `user.Balance`? (Operator baseline, orientation only: 24 `WALLET_HISTORY_DIFFERS_FROM_SNAPSHOT`.)
+The analysis **explains**; it never changes the opening balance, never re-applies history and never
+creates a blocker. `tests/test_wallet_history.py::test_history_never_changes_opening_balances`
+(byte-identical opening files with and without history) still holds.
+
+### 5.1 Every public code path that changes `user.Balance`
+
+`grep -rn wallet_transaction` over both public trees returns **0 hits**. So every Balance change in
+public code is *unlogged* in that table by definition; the deployed fork must have added the logging
+(at a date that is unknown). The column "row written" says what other trace a change leaves.
+
+| # | Mechanism | Balance effect | Code (PRO = mirza_pro@b645db74, BMP = botmirzapanel@92c0ed06) | Row written (public code) | Time / amount observable | Analysis group |
+|---|---|---|---|---|---|---|
+| 1 | Wallet top-up confirmed (gateway callback, admin confirm, card cron) | `+price` | PRO `function.php:1509-1512` (`DirectPayment` default branch), `admin.php:1744`, `cronbot/croncard.php:48`; BMP `functions.php:400-402`, `index.php:2196-2198` | `Payment_report` → `paid` | `time` = creation, **not** the paid time; amount yes | `TOPUP` (+) |
+| 2 | Direct purchase after payment (`getconfigafterpay`) | `Balance = max(0, Balance − price_product)` | PRO `function.php:1198-1201`; BMP `functions.php:381-385` | `Payment_report` + `invoice` | invoice `time_sell` (epoch) | `PURCHASE` (−price; inexact by design) |
+| 3 | Wallet purchase | `−price_product` | PRO `index.php:3951` (`deductBalance`, `function.php:968-977`), `index.php:4495` (multi-buy); BMP `index.php:1927-1928` | `invoice` (`index.php:3920`, `time_sell = $date = time()`, `index.php:78`) | yes / yes | `PURCHASE` (−) |
+| 4 | Renewal, extra volume/time, location change, custom volume, renewal of unlisted user | `−price` | PRO `index.php:1821, 2093, 2294, 2635, 5973, 6688`; BMP `index.php:991-992, 1202-1203` | `service_other` (`extend_user`, `extra_user`, `change_location`, `extra_time_user`, `extra_not_user`, `extends_not_user`; `status` NULL/paid) | `time` / `price` | `SERVICE_OPERATION` (−) |
+| 5 | Direct-pay renewal / extra volume / extra time | `Balance = 0`, then renewal cashback **overwrites** it | PRO `function.php:1277-1278, 1337, 1371-1372, 1443-1444` | `service_other` + `Payment_report` | yes | `SERVICE_OPERATION` (inexact by design) |
+| 6 | Admin "add balance" / "low balance" | `+text` / `−text` | PRO `admin.php:3565-3573`, `3611-3619`; BMP `admin.php:985-987, 1008-1010` | PRO: `Payment_report` `paid`, `add/low balance by admin` (debit stored positive). **BMP: none** | PRO: yes / yes | `ADMIN_ADJUSTMENT` (±) |
+| 7 | Admin adds an amount when confirming a receipt manually | `+text` | PRO `admin.php:4038-4049` | none (the receipt row keeps its own price) | no | — (unobservable) |
+| 8 | Admin bulk credit to all/filtered users | `+price` | PRO `admin.php:2129-2130`; BMP `admin.php:1480` | none | no | — |
+| 9 | Admin reset to zero | `= 0` | PRO `admin.php:7231-7234`; web API `api/users.php:493` | none | no | — |
+| 10 | Web panel / API credit and debit | `±amount` | PRO `panel/user.php:23-26`, `api/users.php:293, 312` | none | no | — |
+| 11 | Refund: service removed by admin, cancel request, manual refund amount, API refund | `+price` | PRO `admin.php:3788-3791, 4741-4744, 4787-4790`, `api/invoice.php:159-161`; BMP `admin.php:1742-1744` | invoice status only (`removebyadmin`) | no | — |
+| 12 | Refund when panel creation/renewal fails | `+price` | PRO `index.php:1849, 2107, 2338, 2355, 2652, 4003, 4547, 5994, 6694`, `function.php:1065-1066, 1281-1282` | none | no | — |
+| 13 | Gateway / card / Stars cashback | `+price × % / 100` | PRO `admin.php:1745-1750`, `cronbot/croncard.php:49-55`, `index.php:6563-6569`, `payment/zarinpal.php:74-79`, `payment/nowpayment.php:29-34`, `payment/iranpay4.php:114-119`, `payment/variza_webhook.php:117-122`, `cronbot/plisio.php:54-60`, `cronbot/iranpay1.php:35-36` | none | no (hint only, §5.3) | — |
+| 14 | Referral commission on purchase | `+price × % / 100` to the referrer | PRO `index.php:4066-4102`, `function.php:1138-1175`, `api/miniapp.php:1060-1091`; BMP `index.php:1824-1829`, `functions.php:376` | none | no | — |
+| 15 | Referral join gift (both sides) | `+price_Discount` | PRO `index.php:334` (at /start), `index.php:5859-5872` (claim); BMP `index.php:205-210` | `reagent_report` (time = **sign-up**, `index.php:235-238`; amount not stored) | time only | `REFERRAL_GIFT` (unquantified) |
+| 16 | Gift code redeemed | `+Discount.price` | PRO `index.php:5777`; BMP `index.php:2333-2334` | `Giftcodeconsumed` (no time, no amount) | no / no | `GIFT_CODE` (unquantified, unplaceable) |
+| 17 | Lucky wheel win | `+wheel price` | PRO `index.php:6253` | `wheel_list` (`index.php:6269-6275`, `price`, `time`) | yes / yes | `WHEEL_PRIZE` (+) |
+| 18 | Lottery prize | `+prize` | PRO `cronbot/lottery.php:61-63` | none | no | — |
+| 19 | Agent request fee / refund on reject | `−fee` / `+fee` | PRO `index.php:6105`, `admin.php:5091-5097` | `Requestagent` (no amount) | no | — |
+| 20 | Sub-bot sale debits the main bot owner | `−price_productMain` | PRO `vpnbot/Default/index.php:1221-1222, 1866-1867` | sub-bot invoice | not linkable | — |
+| 21 | Account transfer (`transferaccount`) | Balance moves with the renamed `user.id` | PRO `admin.php:7020-7043` updates `user.id`, `Payment_report`, `invoice`, `service_other`, `Giftcodeconsumed`… | the fork's `wallet_transaction.id_user` is **not** in that list (unknown) | — | a history under the old id looks like a different customer |
+| 22 | Paid `Payment_report` with an unknown method | unknown | — | `Payment_report` | time yes | `PAYMENT_UNKNOWN_METHOD` (unquantified) |
+
+### 5.2 Features computed per customer (observable only)
+
+For each `DIFFERS_FROM_SNAPSHOT` customer and each `ORDER_UNPROVEN` customer:
+
+* `delta = snapshot − last balance_after`, its sign and magnitude; the last history row's id and time.
+* Every evidence row of groups 1-6, 15-17 and 22, placed **relative to the last history row**:
+  * a local wall time (zone unproven) is any instant in `[L − 14 h, L + 12 h]`; an epoch is exact;
+  * `AFTER` if the event's earliest instant is later than the row's latest instant, `BEFORE` if its
+    latest is earlier, otherwise `IN_WINDOW`; an unreadable time is `UNPLACEABLE`;
+  * per group and placement: count, signed sum, unreadable amounts.
+* `exact_matches`: which sums equal `delta` (`<GROUP>_AFTER`, `<GROUP>_AFTER_AND_WINDOW`, `ALL_AFTER`, `ALL_AFTER_AND_WINDOW`).
+* `unit_hint`: `snapshot == 10 × history` or `history == 10 × snapshot` (a flag, never a conversion).
+* `order`: whether another row with the **same** last timestamp (or, for `ORDER_UNPROVEN`, any row) ends at the snapshot.
+* `cashback_percent_hint`: `(delta − later top-ups) / later top-ups × 100`, for comparison with the `PaySetting` cashback values.
+
+### 5.3 Categories and certainty rules
+
+Evaluated in this order; the first rule that holds wins.
+
+| Cause | Certainty | Rule | Proposed action |
+|---|---|---|---|
+| `ORDER_UNPROVEN` | PROBABLE / UNEXPLAINED | verdict `ORDER_UNPROVEN`: PROBABLE if some row ends at the snapshot; or a tied last timestamp whose other row ends at the snapshot | `NONE` if PROBABLE, else `OWNER_DECISION` |
+| `UNLOGGED_TOPUPS`, `UNLOGGED_PURCHASES`, `UNLOGGED_SERVICE_OPERATIONS`, `UNLOGGED_ADMIN_ADJUSTMENTS`, `UNLOGGED_WHEEL_PRIZES` | **PROVEN** | `delta` = signed sum of all `AFTER` events, all in one group, and **nothing uncertain**: no `IN_WINDOW`/`UNPLACEABLE` event, no unreadable amount, no referral/gift/unknown-method row | `ARCHIVE_ONLY` |
+| `UNLOGGED_MIXED_ACTIVITY` | **PROVEN** | as above with ≥ 2 groups | `ARCHIVE_ONLY` |
+| the matching group's cause (or MIXED) | PROBABLE | an exact match that needs window events, ignores another group's events, or coexists with uncertain evidence | `OWNER_DECISION` |
+| `UNIT_SUSPECT` | PROBABLE | no arithmetic match and a 10× relation (flag only) | `OWNER_DECISION` |
+| `ACTIVITY_AFTER_HISTORY_INEXACT` | PROBABLE | evidence after/around the history that does not add up (cashback, refunds, direct-pay clamping, partial logging) | `OWNER_DECISION` |
+| `UNEXPLAINED` | UNEXPLAINED | no observable evidence at all (paths 7-14, 18-21 leave none) | `OWNER_DECISION` |
+
+PROVEN is an exact arithmetic identity with a cited mechanism; it is still not a ledger. A paid
+`Payment_report` row created before the last history row but confirmed after it cannot be seen
+(the paid time is not stored), which can only lower the certainty, never raise it.
+
+Records: `record_type legacy_wallet_difference`, schema `mirza.wallet_transaction.difference.v1`,
+key `legacy:wallet-difference:<tg>`, `features`, `cause`, `certainty`, `proposed_action`,
+`evidence_refs` (`{table, pk, role}` only — no free text; a pk that is not `[0-9A-Za-z_-]{1,64}` is
+replaced by a keyed `pk_ref`; at most 50 per record), all live-state flags `false`,
+`opening_balance_changed: false`.
+
+Reconciliation `report.reconciliation.wallet_differences` (always present; `status NO_DIFFERENCES`
+when nothing differs or the table is absent): `total`, `from_verdict`, `by_cause`, `by_certainty`
+(`PROVEN`/`PROBABLE`/`UNEXPLAINED`), `by_cause_and_certainty`, `proposed_actions`,
+`proven_abs_delta_by_cause_minor` (Σ|delta| for PROVEN only), `owner_decisions`,
+`evidence_sources`, `time_comparison`, `certainty_rules`.
+
+### 5.4 Owner decisions (codes in `owner_decisions`)
+
+| Code | When | What the owner decides |
+|---|---|---|
+| `WALLET_DIFF_UNEXPLAINED_REVIEW` | any UNEXPLAINED | accept the snapshot as the opening figure for these customers (default) or investigate with the old bot's Telegram report channel (paths 7-14 leave only Telegram messages) |
+| `WALLET_DIFF_PROBABLE_CONFIRM` | any PROBABLE other than an order tie | confirm the probable mechanism, e.g. cashback percentages, refunds |
+| `WALLET_DIFF_UNIT_SUSPECT_CONFIRM_UNIT` | any `UNIT_SUSPECT` | whether these histories were written in Rial (see `money_unit_evidence`) |
+| `WALLET_DIFF_PROVE_TIME_ZONES` | an event fell in the 26 h window | prove the zones of `wallet_transaction.created_at`, `Payment_report.time` and the server, so the window can be narrowed |
+
+### 5.5 Money unit evidence (`report.reconciliation.money_unit_evidence`)
+
+Statistics only; `decision: OWNER`. Distributions (positive values, zero, unparsed, min/p10/p50/p90/max,
+shares that are multiples of 10/100/1000) for paid customer payments, admin adjustments, product
+prices, invoice prices, `service_other` prices, non-zero balances and wallet amounts; cross checks
+(`payment_customer_paid_vs_product_price`, `invoice_price_vs_product_price`, …) counting values equal
+to a reference value, to 10× one and to 1/10 of one, and the median ratio. The code evidence for Toman
+is listed in the section. Read: same scale ⇒ many exact equalities and median ratio of order 1; mixed
+units ⇒ a visible share at exactly 10× or 1/10. Direct purchases pay only the shortfall, so not every
+payment matches a product.
+
+`report.reconciliation.payments.unknown_status` is `{rows, distinct_values, top_values}` (top 20 raw
+values, redacted and truncated).
+
+### 5.6 Re-verifying the 24 on the real backup (offline, operator machine only)
+
+1. Convert the real backup with `money_unit=toman` as usual (local only, nothing uploaded).
+2. In `report.json`: `reconciliation.wallet_history.customers.differs_from_snapshot` must equal the
+   `WALLET_HISTORY_DIFFERS_FROM_SNAPSHOT` warning count (baseline 24), and
+   `reconciliation.wallet_differences.from_verdict.DIFFERS_FROM_SNAPSHOT` must equal it too.
+3. Check `wallet_differences.evidence_sources`: `Payment_report`, `invoice`, `service_other` and
+   `wheel_list` should be `USED`; an `ABSENT`/`COLUMNS_MISSING` source makes some causes unobservable.
+4. Read `by_cause_and_certainty`. For each PROVEN record, re-add its `evidence_refs` by hand
+   (`SELECT price FROM Payment_report WHERE id IN (…)`, `SELECT price_product FROM invoice WHERE
+   id_invoice IN (…)`) and confirm the sum equals `features.delta_snapshot_minus_history_minor`.
+5. Take `owner_decisions` to the owner. Nothing in the package changes until then; the opening figure
+   remains `user.Balance` in every case.

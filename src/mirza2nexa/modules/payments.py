@@ -362,6 +362,15 @@ def _register_messages(ctx: ModuleContext) -> None:
     ctx.register_messages(MESSAGES, BLOCKERS, WARNINGS)
 
 
+TOP_VALUES_LIMIT = 20
+
+
+def _top_values(ctx: ModuleContext, counter: DistinctCounter, table: str, field: str) -> list[dict[str, Any]]:
+    """At most ``TOP_VALUES_LIMIT`` vocabulary values (redacted, truncated) with row counts."""
+    items = sorted(counter.values.items(), key=lambda kv: (-kv[1], kv[0]))[:TOP_VALUES_LIMIT]
+    return [{field: short_text(ctx, v, table), "rows": n} for v, n in items]
+
+
 # ---- conversion ----------------------------------------------------------------------
 def _purpose(r: dict[str, Any], stats) -> dict[str, Any]:
     col = "id_invoice" if "id_invoice" in stats.stored_columns else "invoice" if "invoice" in stats.stored_columns \
@@ -578,7 +587,8 @@ def _convert(ctx: ModuleContext, stats) -> None:
         "duplicate_receipts": {"groups": len(receipt_groups), "successful_payments": len(receipt_group)},
         "duplicate_order_refs": {"order_refs": len(dup_orders), "rows": dup_order_rows},
         "unknown_status": {"rows": unknown_status.rows, "distinct_values": len(unknown_status.values)
-                           + (1 if unknown_status.other else 0)},
+                           + (1 if unknown_status.other else 0),
+                           "top_values": _top_values(ctx, unknown_status, stats.name, "status_raw")},
         "unknown_method": {"rows": unknown_method.rows, "distinct_values": len(unknown_method.values)
                            + (1 if unknown_method.other else 0)},
         "time_notes": {k: dict(sorted(v.items())) for k, v in time_notes.items()},
@@ -593,6 +603,162 @@ def _convert(ctx: ModuleContext, stats) -> None:
     })
 
 
+# ---- money unit evidence (statistics for the owner; never a decision) -----------------
+UNIT_CODE_EVIDENCE = (
+    f"{MIRZA_PRO} index.php:4812, function.php:2588-2589: Zarinpal is called with currency IRT and amount = price",
+    f"{MIRZA_PRO} index.php:4686: the card-to-card copy button appends one 0 (Toman → Rial for the bank)",
+    f"{MIRZA_PRO} lang/fa.php:164,167,232-233: customer copy labels amounts 'تومان'",
+    f"{MIRZA_PRO} admin.php:3560,3606: admin balance limits are reported as maxAmountToman",
+    f"{MIRZA_PRO} function.php:968-987: Balance += / -= the same integer as Payment_report.price and product price",
+)
+UNIT_EXPLANATION = (
+    "Statistics only; the unit decision stays with the owner. Public Mirza code stores Toman everywhere "
+    "(code_evidence). If the deployed fork did the same, customer payment prices and product prices are on the same "
+    "scale: many paid prices equal a product price exactly and the medians are of the same order. A large share "
+    "equal to exactly 10x (or 1/10) a product price, or medians about 10x apart, would point to mixed units. Direct "
+    "purchases pay only the shortfall above the wallet balance (index.php:3925-3927), so not every payment can match.")
+UNIT_EXPLANATION_FA = (
+    "این‌ها فقط آمار هستند و تصمیم واحد پول با مالک است. اگر مبلغ پرداخت‌ها و قیمت محصولات هم‌مقیاس باشند، بسیاری از "
+    "پرداخت‌ها دقیقاً برابر قیمت یک محصول هستند؛ سهم زیاد «۱۰ برابر» یا «یک‌دهم» نشانه واحدهای مختلط است.")
+
+
+def _unit_values(ctx: ModuleContext) -> dict[str, list[int]]:
+    """Positive integer amounts per source; zero/unparsed counted separately (``__zero``/``__unparsed``)."""
+    conn = ctx.conn
+    conn.execute("DROP TABLE IF EXISTS m2n_unit")
+    conn.execute("CREATE TEMP TABLE m2n_unit (src TEXT, v INTEGER)")
+    other: dict[str, list[int]] = {}
+
+    def feed(src: str, raws, parse) -> None:
+        zero = unparsed = 0
+        batch: list[tuple[str, int]] = []
+        for raw in raws:
+            ctx.tick()
+            v = parse(raw)
+            if v is None:
+                unparsed += 1
+            elif v == 0:
+                zero += 1
+            else:
+                batch.append((src, abs(v)))
+                if len(batch) >= 2000:
+                    conn.executemany("INSERT INTO m2n_unit VALUES (?,?)", batch)
+                    batch.clear()
+        if batch:
+            conn.executemany("INSERT INTO m2n_unit VALUES (?,?)", batch)
+        other[src] = [zero, unparsed]
+
+    def price(raw):
+        return rules.parse_price(raw)[0]
+
+    def column(spec: str, col: str, where: str = "") -> list[str | None] | None:
+        for st in ctx.tables_for(spec):
+            if col in st.stored_columns:
+                return [r[0] for r in conn.execute(
+                    f"SELECT {col_expr(st, col)} FROM {sql_ident(st.sql_name)} {where} ORDER BY rowno")]  # noqa: S608
+        return None
+
+    for st in ctx.tables_for(TABLE):
+        if not {"price", "payment_Status", "Payment_Method"} <= set(st.stored_columns):
+            continue
+        cust: list[str | None] = []
+        admin: list[str | None] = []
+        for raw, m_raw in conn.execute(
+                f"SELECT c_price, c_Payment_Method FROM {sql_ident(st.sql_name)} "  # noqa: S608
+                "WHERE c_payment_Status = 'paid' ORDER BY rowno"):
+            method = METHOD_VOCAB[m_raw][0] if m_raw in METHOD_VOCAB else "UNKNOWN"
+            if method in ADMIN_METHODS:
+                admin.append(raw)
+            elif method != "UNKNOWN":
+                cust.append(raw)
+        feed("payment_customer_paid", cust, price)
+        feed("payment_admin_adjustment", admin, price)
+        break
+    for src, spec, col, parse in (("product_price", "product", "price_product", price),
+                                  ("invoice_price", "invoice", "price_product", price),
+                                  ("service_other_price", "service_other", "price", price),
+                                  ("user_balance_nonzero_abs", "user", "Balance", rules.parse_balance),
+                                  ("wallet_transaction_amount_abs", "wallet_transaction", "amount", rules.parse_balance)):
+        vals = column(spec, col)
+        if vals is not None:
+            feed(src, vals, parse)
+    conn.execute("CREATE INDEX m2n_unit_sv ON m2n_unit (src, v)")
+    return other
+
+
+def _quantile(conn, src: str, n: int, q: float) -> int | None:
+    if n == 0:
+        return None
+    k = min(n - 1, int(q * (n - 1)))
+    return conn.execute("SELECT v FROM m2n_unit WHERE src = ? ORDER BY v LIMIT 1 OFFSET ?", (src, k)).fetchone()[0]
+
+
+def _ratio(a: int, b: int) -> str | None:
+    """Decimal text with 4 places (the package format forbids floats)."""
+    if b == 0:
+        return None
+    q = (a * 10000 * 2 + b) // (2 * b)  # rounded half up, exact integer arithmetic
+    return f"{q // 10000}.{q % 10000:04d}"
+
+
+def money_unit_evidence(ctx: ModuleContext) -> dict[str, Any]:
+    """Distribution statistics that help the owner confirm the money unit (Toman vs Rial).
+
+    Nothing here changes an amount or the configured unit; every figure is an observation."""
+    conn = ctx.conn
+    other = _unit_values(ctx)
+    dist: dict[str, Any] = {}
+    medians: dict[str, int | None] = {}
+    for src in sorted(other):
+        n = conn.execute("SELECT COUNT(*) FROM m2n_unit WHERE src = ?", (src,)).fetchone()[0]
+        m10, m100, m1000 = conn.execute(
+            "SELECT COALESCE(SUM(v % 10 = 0),0), COALESCE(SUM(v % 100 = 0),0), COALESCE(SUM(v % 1000 = 0),0) "
+            "FROM m2n_unit WHERE src = ?", (src,)).fetchone()
+        q = {name: _quantile(conn, src, n, f) for name, f in (("min", 0.0), ("p10", 0.1), ("p50", 0.5),
+                                                               ("p90", 0.9), ("max", 1.0))}
+        medians[src] = q["p50"]
+        dist[src] = {"positive_values": n, "zero_values": other[src][0], "unparsed_values": other[src][1],
+                     **{k: None if v is None else str(v) for k, v in q.items()},
+                     "share_multiple_of_10": _ratio(m10, n), "share_multiple_of_100": _ratio(m100, n),
+                     "share_multiple_of_1000": _ratio(m1000, n)}
+
+    def cross(a: str, b: str) -> dict[str, Any] | None:
+        if a not in other or b not in other:
+            return None
+        n = conn.execute("SELECT COUNT(*) FROM m2n_unit WHERE src = ?", (a,)).fetchone()[0]
+
+        def count(cond: str) -> int:
+            return conn.execute(
+                f"SELECT COUNT(*) FROM m2n_unit x WHERE x.src = ? AND EXISTS "  # noqa: S608 - fixed conditions
+                f"(SELECT 1 FROM m2n_unit y WHERE y.src = ? AND {cond})", (a, b)).fetchone()[0]
+
+        same = count("y.v = x.v")
+        x10 = count("x.v % 10 = 0 AND y.v = x.v / 10")
+        d10 = count("y.v = x.v * 10")
+        ma, mb = medians.get(a), medians.get(b)
+        return {"values": n, "equal_to_a_reference_value": same, "equal_to_10x_a_reference_value": x10,
+                "equal_to_a_reference_value_div_10": d10, "share_equal": _ratio(same, n),
+                "share_10x": _ratio(x10, n), "share_div_10": _ratio(d10, n),
+                "median_ratio": None if not ma or not mb else _ratio(ma, mb)}
+
+    out = {
+        "decision": "OWNER",
+        "configured_unit": ctx.money_unit,
+        "distributions": dist,
+        "cross_checks": {
+            "payment_customer_paid_vs_product_price": cross("payment_customer_paid", "product_price"),
+            "invoice_price_vs_product_price": cross("invoice_price", "product_price"),
+            "service_other_price_vs_product_price": cross("service_other_price", "product_price"),
+            "payment_customer_paid_vs_invoice_price": cross("payment_customer_paid", "invoice_price"),
+        },
+        "code_evidence": list(UNIT_CODE_EVIDENCE),
+        "explanation": UNIT_EXPLANATION,
+        "explanation_fa": UNIT_EXPLANATION_FA,
+    }
+    conn.execute("DROP TABLE IF EXISTS m2n_unit")
+    return out
+
+
 def run(ctx: ModuleContext) -> None:
     _register_messages(ctx)
     for stats in ctx.tables_for(TABLE):
@@ -600,6 +766,7 @@ def run(ctx: ModuleContext) -> None:
             ctx.coverage(stats.name, status="empty")
             continue
         _convert(ctx, stats)
+    ctx.reconciliation("money_unit_evidence", money_unit_evidence(ctx))
 
 
 register_module(Module(key="payments", title_fa="تاریخچه پرداخت‌ها (آرشیو)", run=run, order=200))
@@ -702,6 +869,87 @@ def synth_rows(state: SynthState) -> list[str]:
         for e in extra:
             k += 1
             rows.append(row(k, *e))
+        # payments that happen after the planned customers' last wallet transaction (wallet_history synth)
+        for plan in wallet_cause_plan(state):
+            for method, status, price, created in plan["payments"]:
+                k += 1
+                rows.append(row(k, plan["uid"], f"{0xcafe000000 + k:010x}", created, None, str(price), None, method,
+                                status, None, None))
+    return rows
+
+
+# ---- synthetic wallet-difference causes (shared with wallet_history's synth hook) -----------
+# The planned customers' wallet history ends at WALLET_CAUSE_LAST_TX; the evidence below happens
+# well after it (> 26 h, the zone-free comparison window) unless the scenario tests that window.
+WALLET_CAUSE_LAST_TX = datetime(2026, 1, 15, 10, 0, 0)  # noqa: DTZ001 - synthetic local wall time
+_AFTER = "2026/03/01 10:00:00"
+
+
+def _epoch(y: int, mo: int, d: int, h: int = 10) -> int:
+    import calendar
+
+    return calendar.timegm((y, mo, d, h, 0, 0))
+
+
+# kind → (expected cause, certainty, payments, invoices (price, epoch)); history end = snapshot - delta
+WALLET_CAUSE_SCENARIOS: dict[str, dict[str, Any]] = {
+    "TOPUPS": {"cause": "UNLOGGED_TOPUPS", "certainty": "PROVEN", "delta": 50000,
+               "payments": [("zarinpal", "paid", 20000, _AFTER), ("cart to cart", "paid", 30000, "2026/03/02 11:00:00"),
+                            ("zarinpal", "expire", 99000, "2026/03/03 11:00:00")],  # not paid: ignored
+               "invoices": []},
+    "PURCHASE": {"cause": "UNLOGGED_PURCHASES", "certainty": "PROVEN", "delta": -70000, "payments": [],
+                 "invoices": [(70000, _epoch(2026, 3, 2))]},
+    "ADMIN": {"cause": "UNLOGGED_ADMIN_ADJUSTMENTS", "certainty": "PROVEN", "delta": 60000,
+              "payments": [("add balance by admin", "paid", 100000, _AFTER),
+                           ("low balance by admin", "paid", 40000, "2026/03/04 09:00:00")], "invoices": []},
+    "MIXED": {"cause": "UNLOGGED_MIXED_ACTIVITY", "certainty": "PROVEN", "delta": 7000,
+              "payments": [("zarinpal", "paid", 10000, _AFTER)], "invoices": [(3000, _epoch(2026, 3, 5))]},
+    "WINDOW": {"cause": "UNLOGGED_TOPUPS", "certainty": "PROBABLE", "delta": 15000,
+               "payments": [("zarinpal", "paid", 15000, "2026/01/15 12:00:00")], "invoices": []},  # 2 h after
+    "INEXACT": {"cause": "ACTIVITY_AFTER_HISTORY_INEXACT", "certainty": "PROBABLE", "delta": 24000,
+                "payments": [("zarinpal", "paid", 25000, _AFTER)], "invoices": []},
+    "UNIT": {"cause": "UNIT_SUSPECT", "certainty": "PROBABLE", "delta": None, "payments": [], "invoices": []},
+    "UNEXPLAINED": {"cause": "UNEXPLAINED", "certainty": "UNEXPLAINED", "delta": 12345, "payments": [],
+                    "invoices": []},
+}
+
+
+def wallet_cause_plan(state: SynthState) -> list[dict[str, Any]]:
+    """Deterministic customers whose wallet history differs from the snapshot for a known reason.
+
+    Picked from the end of the user list (the anomaly rows use the first users); blocked users
+    (``n % 97 == 5``) are skipped. ``UNIT`` needs a positive snapshot: its history ends at 10x it."""
+    if not state.spec.anomalies or len(state.user_ids) < 40:
+        return []
+    free = [i for i in range(len(state.user_ids) - 1, -1, -1) if i % 97 != 5]
+    plan: list[dict[str, Any]] = []
+    for n, kind in enumerate(WALLET_CAUSE_SCENARIOS):
+        sc = WALLET_CAUSE_SCENARIOS[kind]
+        if kind == "UNIT":
+            idx = next((i for i in free if state.balances[i] > 0), None)
+            if idx is None:
+                continue
+        else:
+            idx = free[0]
+        free.remove(idx)
+        snap = state.balances[idx]
+        end = snap * 10 if kind == "UNIT" else snap - sc["delta"]
+        invoices = [(f"{7777700 + n}{0xabc00000 + j:08x}", price, epoch, f"wcause{n}x{j}")
+                    for j, (price, epoch) in enumerate(sc["invoices"])]
+        plan.append({"kind": kind, "uid": state.user_ids[idx], "index": idx, "snapshot": snap, "history_end": end,
+                     "delta": snap - end, "cause": sc["cause"], "certainty": sc["certainty"],
+                     "payments": sc["payments"], "invoices": invoices})
+    return plan
+
+
+def _plan_invoice_rows(state: SynthState) -> list[str]:
+    rows = []
+    for plan in wallet_cause_plan(state):
+        for key, price, epoch, uname in plan["invoices"]:
+            rows.append(f"({sql_str(key)},{sql_str(plan['uid'])},{sql_str(uname)},{sql_str('سرور آزمایشی')},"
+                        f"{sql_str(str(epoch))},{sql_str('پلن 1')},{sql_str(str(price))},{sql_str('10')},"
+                        f"{sql_str('30')},{sql_str('active')},{sql_str('syn-a')},{sql_str('p001')},{sql_str('0')},"
+                        f"{sql_str('0')},{sql_str('')},NULL,NULL)")
     return rows
 
 
@@ -712,6 +960,14 @@ def _synth(out, state: SynthState) -> None:
     state.write_rows(out, TABLE, rows)
     out.write("UNLOCK TABLES;\n")
     state.exp["payments"] = len(rows)
+    state.exp["wallet_cause_plan"] = [{k: plan[k] for k in ("kind", "uid", "snapshot", "history_end", "delta", "cause",
+                                                            "certainty")} for plan in wallet_cause_plan(state)]
+    inv = _plan_invoice_rows(state)
+    if inv:  # purchases after the planned customers' last wallet transaction (see wallet_cause_plan)
+        out.write("LOCK TABLES `invoice` WRITE;\n")
+        state.write_rows(out, "invoice", inv)
+        out.write("UNLOCK TABLES;\n")
+        state.exp["invoices"] = state.exp.get("invoices", 0) + len(inv)
 
 
 register_synth("payments", _synth, order=200)

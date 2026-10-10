@@ -29,7 +29,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from . import __version__, report_fa
+from . import __version__, readiness_html, report_fa
 from .archive import inspect_archive, verify_password
 from .errors import MigrationError
 from .jobs import Job, JobManager, clear_history, read_history
@@ -474,6 +474,57 @@ def create_app(manager: JobManager, *, port: int, launch_token: str) -> FastAPI:
         body = report_fa.render_report_html(rep, manifest=manifest if isinstance(manifest, dict) else None)
         return Response(body, media_type="text/html; charset=utf-8", headers={
             "Content-Disposition": f'attachment; filename="mirza2nexa-report-{job.id}.html"',
+            "Content-Security-Policy": REPORT_HTML_CSP,
+        })
+
+    # ---- Phase 3: migration readiness --------------------------------------------------
+    READINESS_FILE = "migration-readiness.json"
+    READINESS_NOT_READY = "گزارش آمادگی مهاجرت هنوز آماده نیست؛ ابتدا تبدیل باید کامل شود."
+
+    def _load_readiness(job: Job) -> dict[str, Any] | None:
+        p = _report_file(job, READINESS_FILE)
+        if p is None or p.is_symlink() or not p.is_file() or p.stat().st_size > 16 * 1024 * 1024:
+            return None
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    @app.get("/api/jobs/{job_id}/readiness")
+    async def readiness(job_id: str) -> Response:
+        job = job_or_404(job_id)
+        if isinstance(job, JSONResponse):
+            return job
+        data = _load_readiness(job)
+        if data is None:
+            return _err(404, "readiness.not_ready", READINESS_NOT_READY)
+        return JSONResponse(data)
+
+    @app.get("/api/jobs/{job_id}/readiness.json")
+    async def readiness_json(job_id: str) -> Response:
+        job = job_or_404(job_id)
+        if isinstance(job, JSONResponse):
+            return job
+        data = _load_readiness(job)
+        if data is None:
+            return _err(404, "readiness.not_ready", READINESS_NOT_READY)
+        body = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+        return Response(body.encode("utf-8"), media_type="application/json; charset=utf-8", headers={
+            "Content-Disposition": f'attachment; filename="migration-readiness-{job.id}.json"',
+        })
+
+    @app.get("/api/jobs/{job_id}/readiness.html")
+    async def readiness_report_html(job_id: str) -> Response:
+        job = job_or_404(job_id)
+        if isinstance(job, JSONResponse):
+            return job
+        data = _load_readiness(job)
+        if data is None:
+            return _err(404, "readiness.not_ready", READINESS_NOT_READY)
+        body = readiness_html.render_readiness_html(data)
+        return Response(body, media_type="text/html; charset=utf-8", headers={
+            "Content-Disposition": f'attachment; filename="migration-readiness-{job.id}.html"',
             "Content-Security-Policy": REPORT_HTML_CSP,
         })
 

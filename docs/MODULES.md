@@ -46,7 +46,7 @@ These rules are enforced by `tests/test_modules_contract.py`:
      financial contradiction.
    * Use `ctx.warn(...)` for package-level notes.
 
-## Record shapes (package schema `1.1.0`)
+## Record shapes (package schema `1.2.0`; 1.2.0 additions in `PACKAGE_CONTRACT.md`)
 
 | File | `record_type` | Owner |
 |---|---|---|

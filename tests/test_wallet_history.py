@@ -90,12 +90,15 @@ def test_healthy_backup_stays_ready(healthy):
         c = next(c for c in res.report["coverage"] if c["table"] == table)
         assert c["status"] == "archived" and c["accounted_rows"] == c["rows"] > 0, table
     v = r["customers"]["verdicts"]
-    assert v["MATCHES_SNAPSHOT"] >= 5 and v["DIFFERS_FROM_SNAPSHOT"] == 1 and v["NO_SNAPSHOT"] == 1
+    planned = len(exp["wallet_cause_plan"])
+    assert planned == len(payments.WALLET_CAUSE_SCENARIOS)
+    # one chain-gap anomaly + the planned wallet-difference causes (tests/test_wallet_causes.py)
+    assert v["MATCHES_SNAPSHOT"] >= 5 and v["DIFFERS_FROM_SNAPSHOT"] == 1 + planned and v["NO_SNAPSHOT"] == 1
     assert r["duplicate_suspects"] == {"groups": 1, "rows": 2}
     assert r["inconsistent_rows"] == 1 and r["chain_gaps"] >= 1
     assert r["ref_id"]["relation"] == "UNPROVEN"
     warn = {w["code"]: w["count"] for w in res.report["warnings"]}
-    assert warn["WALLET_HISTORY_DIFFERS_FROM_SNAPSHOT"] == 1
+    assert warn["WALLET_HISTORY_DIFFERS_FROM_SNAPSHOT"] == 1 + planned
 
 
 def test_records_are_history_only(healthy):

@@ -44,7 +44,7 @@ def test_selfcheck_in_fresh_process(tmp_path):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     status = json.loads(proc.stdout)
     assert status["ok"] and not status["missing_modules"] and not status["missing_tables"]
-    assert status["specs"] >= 49
+    assert status["specs"] >= 52
 
 
 _BLOCK_PAYMENTS = r"""
@@ -112,6 +112,10 @@ def test_fresh_processes_are_repeatable_and_cover_phase2_tables(tmp_path):
                               capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=600)
         assert proc.returncode == 0, proc.stderr[-2000:]
         results.append(json.loads((out / "report.json").read_text(encoding="utf-8")))
+        # the CLI must keep the (PII-free) readiness report next to the package
+        rd = json.loads((out / "migration-readiness.json").read_text(encoding="utf-8"))
+        assert any(b["code"] == "IMPORTER_NOT_BUILT" for b in rd["import_blockers"])
+        assert "<html" in (out / "migration-readiness.html").read_text(encoding="utf-8").lower()
     first = _logical(results[0])
     for r in results[1:]:
         assert _logical(r) == first

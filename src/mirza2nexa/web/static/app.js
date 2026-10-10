@@ -190,6 +190,20 @@
     blocker_category: {},
     entity_block_reason: {},
     mapping_status: {},
+    readiness_verdicts: {
+      NOT_READY_FOR_IMPORT: 'آماده Import نیست',
+      READY_FOR_IMPORTER_DRY_RUN: 'آماده اجرای آزمایشی Importer (نه Import واقعی)',
+      BLOCKED: 'مسدود',
+    },
+    readiness_keys: {},
+    ownership_decisions: {},
+    history_causes: {},
+    review_groups: {},
+    panel_status: { PENDING_OWNER_MAPPING: 'در انتظار نگاشت توسط مالک' },
+    package_readiness: { ready: 'آماده', blocked: 'مسدود' },
+    money_units: { toman: 'تومان', rial: 'ریال', IRT: 'تومان', IRR: 'ریال' },
+    confirmed_by: { operator: 'اپراتور', evidence: 'شواهد داخل بکاپ' },
+    import_blockers: {},
   };
   const own = (o, k) => (o && Object.prototype.hasOwnProperty.call(o, k) ? o[k] : undefined);
   function humanise(k) {
@@ -400,7 +414,7 @@
   }
 
   // ------------------------------------------------------------------ navigation
-  const VIEWS = ['dashboard', 'new', 'status', 'report', 'coverage', 'review', 'preview', 'download', 'history', 'settings'];
+  const VIEWS = ['dashboard', 'new', 'status', 'report', 'readiness', 'coverage', 'review', 'preview', 'download', 'history', 'settings'];
   const onShow = {};
 
   function go(view, opts) {
@@ -1459,6 +1473,225 @@
         el('span', { class: 'error-code', text: m.entity })));
     }
     ents.append(el('h3', { class: 'small', text: 'بخش‌های مسدود و دلیل' }), ul);
+  }
+
+  // ------------------------------------------------------------------ migration readiness
+  // Aggregates only (counts, sums, codes, table names) from migration-readiness.json; every key may
+  // be absent, in which case the field is shown as «—» or skipped.
+  const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
+  const objList = (v) => (Array.isArray(v) ? v.filter((x) => x && typeof x === 'object' && !Array.isArray(x)) : []);
+  const rkLabel = (k) => own(L.readiness_keys, k) || keyLabel(k);
+  const codeLabel = (table, code, fallback) => own(table, String(code)) || fallback || humanise(code === undefined || code === null ? '—' : code);
+  function yesNo(v) {
+    if (typeof v !== 'boolean') return '—';
+    return el('span', { class: 'bool ' + (v ? 'is-yes' : 'is-no'), text: v ? 'بله' : 'خیر' });
+  }
+  function moneyText(amount, currency) {
+    if (amount === null || amount === undefined) return '—';
+    const unit = own(L.money_units, String(currency)) || (currency ? String(currency) : '');
+    return fmtNum(amount) + (unit ? ' ' + unit : '');
+  }
+  /** kv-grid rows whose label is a Persian key label with the code shown small. */
+  function rkGrid(dl, pairs) {
+    clear(dl);
+    let any = false;
+    for (const [k, v, cls] of pairs) {
+      if (v === undefined) continue;
+      any = true;
+      dl.append(el('dt', { 'data-key': k }, labelWithCode(rkLabel(k), k)),
+        v instanceof Node ? el('dd', null, v) : el('dd', { class: cls || null, text: v === null ? '—' : v }));
+    }
+    if (!any) dl.append(el('dt', { text: '—' }), el('dd', { class: 'muted', text: 'اطلاعاتی موجود نیست.' }));
+  }
+  const numOrUndef = (v) => (v === undefined ? undefined : fmtNum(v));
+  function countTable(counts, labelOf, head, testid) {
+    const c = obj(counts);
+    const keys = Object.keys(c);
+    if (!keys.length) return null;
+    return el('div', { class: 'table-wrap readiness-mini' },
+      el('table', { class: 'table', 'data-testid': testid || null },
+        el('thead', null, el('tr', null, el('th', { scope: 'col', text: head }), el('th', { scope: 'col', text: 'تعداد' }))),
+        el('tbody', null, keys.map((k) => el('tr', { 'data-key': k },
+          el('td', null, labelWithCode(labelOf(k), k)), el('td', { class: 'num', text: fmtNum(c[k]) }))))));
+  }
+  function codedItems(ul, items, emptyText, labels) {
+    clear(ul);
+    if (!items.length) ul.append(el('li', { class: 'none', text: emptyText }));
+    for (const it of items) {
+      const code = it.code === undefined || it.code === null ? '' : String(it.code);
+      const title = labels ? own(labels, code) : undefined;
+      ul.append(el('li', { 'data-code': code },
+        el('span', { class: 'msg' },
+          title && title !== it.message_fa ? el('strong', { text: title + ' — ' }) : null,
+          String(it.message_fa || humanise(code || '—'))),
+        it.count !== undefined && it.count !== null ? el('span', { class: 'pill num', text: fmtNum(it.count) + ' مورد' }) : null,
+        code ? el('span', { class: 'error-code', text: code }) : null));
+    }
+  }
+
+  onShow.readiness = async function () {
+    $('readiness-body').hidden = true;
+    $('readiness-empty').hidden = false;
+    $('download-readiness-json').hidden = true;
+    $('download-readiness-html').hidden = true;
+    $('readiness-empty').textContent = notReadyMessage('گزارش آمادگی مهاجرت');
+    if (!S.job || S.job.status !== 'completed') return;
+    $('readiness-empty').textContent = 'در حال بارگذاری…';
+    const jobId = S.job.id;
+    try {
+      const r = S.readinessFor === jobId && S.readiness ? S.readiness : await api('GET', jobPath(jobId, '/readiness'));
+      if (S.view !== 'readiness' || !S.job || S.job.id !== jobId) return;
+      S.readiness = r;
+      S.readinessFor = jobId;
+      renderReadiness(r);
+      const j = $('download-readiness-json');
+      j.href = jobPath(jobId, '/readiness.json');
+      j.hidden = false;
+      const h = $('download-readiness-html');
+      h.href = jobPath(jobId, '/readiness.html');
+      h.hidden = false;
+      $('readiness-empty').hidden = true;
+      $('readiness-body').hidden = false;
+    } catch (e) {
+      $('readiness-empty').textContent = e.status === 404 && e.message ? e.message : notReadyMessage('گزارش آمادگی مهاجرت');
+      if (e.status !== 404 && e.status !== 401) showError(e);
+    }
+  };
+
+  function renderReadiness(raw) {
+    const r = obj(raw);
+    // verdict
+    const v = obj(r.verdict);
+    const code = v.code === undefined || v.code === null ? '' : String(v.code);
+    const vb = $('readiness-verdict');
+    clear(vb);
+    vb.className = 'readiness ' + (code === 'READY_FOR_IMPORTER_DRY_RUN' ? 'is-dryrun' : 'is-blocked');
+    vb.setAttribute('data-verdict', code);
+    const reasons = objList(v.reasons);
+    vb.append(
+      el('span', { 'aria-hidden': 'true', text: code === 'READY_FOR_IMPORTER_DRY_RUN' ? '◐' : '⛔' }),
+      el('span', null,
+        el('span', { 'data-testid': 'readiness-verdict-label', text: v.label_fa ? String(v.label_fa) : codeLabel(L.readiness_verdicts, code) }),
+        code ? el('span', { class: 'key-code', text: code }) : null,
+        el('span', { class: 'readiness-sub', text: 'حتی در بهترین حالت، این نتیجه مجوز Import نیست؛ Importer نکسا هنوز ساخته نشده است.' }),
+        reasons.length ? el('ul', { class: 'readiness-reasons' }, reasons.map((x) => el('li', { 'data-code': x.code === undefined ? null : String(x.code) },
+          String(x.message_fa || humanise(x.code || '—')), x.code ? el('span', { class: 'key-code', text: String(x.code) }) : null))) : null));
+
+    rkGrid($('readiness-meta'), ['import_id', 'generated_at', 'converter_version', 'package_contract_version', 'readiness_version']
+      .map((k) => [k, r[k] === undefined || r[k] === null ? undefined : el('bdi', { dir: 'ltr', class: 'mono', text: String(r[k]) })]));
+
+    // package health
+    const ph = obj(r.package_health);
+    rkGrid($('readiness-health-kv'), [
+      ['readiness', ph.readiness === undefined ? undefined : codeLabel(L.package_readiness, ph.readiness), ph.readiness === 'ready' ? 'ok-text' : 'bad-text'],
+      ['catalogue_ok', 'catalogue_ok' in ph ? yesNo(ph.catalogue_ok) : undefined],
+    ]);
+    codedItems($('readiness-health-blockers'), objList(ph.blockers), 'مورد مسدودکننده‌ای برای بسته ثبت نشده است.', L.blocker_codes);
+
+    // financial
+    const fin = obj(r.financial);
+    const pos = obj(fin.positive_balances);
+    const mu = obj(fin.money_unit);
+    const hd = obj(fin.history_differences);
+    let unit;
+    if (fin.money_unit !== undefined) {
+      unit = (mu.value ? codeLabel(L.money_units, mu.value) : 'تعیین‌نشده') + ' — ' +
+        (mu.confirmed_by ? 'تأییدشده توسط ' + codeLabel(L.confirmed_by, mu.confirmed_by) : 'تأیید نشده');
+    }
+    rkGrid($('readiness-financial-kv'), [
+      ['balanced', 'balanced' in fin ? yesNo(fin.balanced) : undefined],
+      ['source_recount_matches', 'source_recount_matches' in fin ? yesNo(fin.source_recount_matches) : undefined],
+      ['money_unit', unit, mu.confirmed_by ? '' : 'bad-text'],
+      ['positive_balances', fin.positive_balances === undefined ? undefined : fmtNum(pos.count) + ' حساب — ' + moneyText(pos.amount_minor, pos.currency)],
+      ['debts', fin.debts && typeof fin.debts === 'object' && ('count' in fin.debts || 'amount_minor' in fin.debts)
+        ? fmtNum(fin.debts.count) + ' حساب — ' + moneyText(fin.debts.amount_minor, fin.debts.currency) : undefined],
+      ['net_minor', fin.net_minor === undefined ? undefined : moneyText(fin.net_minor, pos.currency)],
+      ['independent_recount_matches', 'independent_recount_matches' in fin ? yesNo(fin.independent_recount_matches) : undefined],
+      ['payments_unknown_status', numOrUndef(fin.payments_unknown_status)],
+      ['cases_needing_review', numOrUndef(fin.cases_needing_review)],
+    ]);
+    const fx = $('readiness-financial-extra');
+    clear(fx);
+    const debtsObj = obj(fin.debts);
+    if (Object.keys(debtsObj).length && !('count' in debtsObj || 'amount_minor' in debtsObj)) fx.append(el('div', { class: 'readiness-mini' }, el('h3', { text: rkLabel('debts') }), reconTable(fin.debts, 0)));
+    if (fin.history_differences !== undefined) {
+      const dl = el('dl', { class: 'kv-grid' });
+      rkGrid(dl, ['total', 'proven', 'probable', 'unexplained'].map((k) => [k, numOrUndef(hd[k])]));
+      fx.append(el('div', { class: 'readiness-mini', 'data-testid': 'readiness-history-differences' },
+        el('h3', { text: rkLabel('history_differences') }), dl,
+        countTable(hd.by_cause, (k) => codeLabel(L.history_causes, k), 'علت', 'readiness-causes')));
+    }
+
+    // coverage
+    const cov = obj(r.coverage);
+    rkGrid($('readiness-coverage-kv'), [['tables_total', numOrUndef(cov.tables_total)], ['non_empty', numOrUndef(cov.non_empty)]]);
+    const cx = $('readiness-coverage-extra');
+    clear(cx);
+    cx.append(...[countTable(cov.by_status, covStatusLabel, 'وضعیت'), countTable(cov.by_class, (k) => classLabel(k), 'طبقه')].filter(Boolean));
+    const unc = Array.isArray(cov.uncovered) ? cov.uncovered.filter((t) => typeof t === 'string' || typeof t === 'number') : [];
+    cx.append(el('div', { class: 'readiness-mini' },
+      el('h3', null, rkLabel('uncovered') + ' ', el('span', { class: 'pill num ' + (unc.length ? 'pill-bad' : ''), text: fmtNum(unc.length) })),
+      unc.length
+        ? el('ul', { class: 'readiness-tables', 'data-testid': 'readiness-uncovered' }, unc.map((t) => el('li', { 'data-table': String(t) }, el('bdi', { dir: 'ltr', text: String(t) }))))
+        : el('p', { class: 'muted small', text: 'همه جدول‌ها پوشش داده شده‌اند.' })));
+
+    // ownership
+    const ow = obj(r.ownership);
+    rkGrid($('readiness-ownership-kv'), ['total', 'needs_manual_review', 'confirmed_transfers'].map((k) => [k, numOrUndef(ow[k])]));
+    const ox = $('readiness-ownership-extra');
+    clear(ox);
+    if (ow.available === false) ox.append(el('p', { class: 'muted small', text: 'تحلیل مالکیت سرویس‌ها در این بکاپ در دسترس نبود.' }));
+    const ot = countTable(ow.by_decision, (k) => codeLabel(L.ownership_decisions, k), 'تصمیم', 'readiness-decisions');
+    if (ot) ox.append(ot);
+
+    // panels
+    const pn = obj(r.panels);
+    rkGrid($('readiness-panels-kv'), [
+      ...['registry_rows', 'codes_in_invoices', 'mapped', 'pending_mapping'].map((k) => [k, numOrUndef(pn[k])]),
+      ['status', pn.status === undefined ? undefined : labelWithCode(codeLabel(L.panel_status, pn.status), pn.status)],
+    ]);
+
+    // review
+    const rv = Object.assign({}, obj(r.review));
+    if (rv.owner_decisions_needed === undefined && r.owner_decisions_needed !== undefined) rv.owner_decisions_needed = r.owner_decisions_needed;
+    const stats = $('readiness-review-stats');
+    clear(stats);
+    for (const k of ['total_items', 'distinct_records', 'auto_resolved_with_evidence', 'resolvable_by_code', 'archive_only',
+      'owner_decision_items', 'owner_decisions_needed', 'adoption_stage']) {
+      if (rv[k] === undefined || (rv[k] && typeof rv[k] === 'object')) continue;
+      stats.append(el('div', { class: 'card stat', 'data-testid': 'readiness-stat-' + k },
+        el('div', { class: 'stat-label', text: rkLabel(k) }), el('div', { class: 'stat-value num', text: fmtNum(rv[k]) })));
+    }
+    const tb = $('readiness-review-groups-tbody');
+    clear(tb);
+    const groups = objList(rv.by_group);
+    if (!groups.length) tb.append(el('tr', null, el('td', { colspan: '7', class: 'muted', text: 'گروهی ثبت نشده است.' })));
+    for (const g of groups) {
+      const gc = g.group === undefined || g.group === null ? '' : String(g.group);
+      tb.append(el('tr', { 'data-group': gc },
+        el('td', null, labelWithCode(codeLabel(L.review_groups, gc, g.label_fa), gc)),
+        ...['items', 'records', 'resolvable_by_code', 'archive_only', 'owner_decision', 'adoption_time']
+          .map((k) => el('td', { class: 'num', text: fmtNum(g[k]) }))));
+    }
+
+    // owner decisions
+    const od = objList(r.owner_decisions);
+    $('readiness-owner-decision-count').textContent = fmtNum(od.length);
+    const ol = $('readiness-owner-decision-list');
+    clear(ol);
+    if (!od.length) ol.append(el('li', { class: 'none', text: 'تصمیمی ثبت نشده است.' }));
+    for (const d of od) {
+      ol.append(el('li', { 'data-decision': d.id === undefined ? null : String(d.id), 'data-blocking': d.blocking === true ? 'true' : 'false' },
+        d.blocking === true ? el('span', { class: 'pill pill-bad', text: 'مسدودکننده' }) : null,
+        el('span', { class: 'msg' }, el('strong', { text: String(d.title_fa || '—') }),
+          d.detail_fa ? el('span', { class: 'block small muted', text: String(d.detail_fa) }) : null),
+        d.id !== undefined && d.id !== null ? el('span', { class: 'error-code', text: String(d.id) }) : null));
+    }
+
+    // import blockers
+    const ib = objList(r.import_blockers);
+    $('readiness-import-blocker-count').textContent = fmtNum(ib.length);
+    codedItems($('readiness-import-blocker-list'), ib, 'مانعی ثبت نشده است (Importer همچنان ساخته نشده است).', L.import_blockers);
   }
 
   // ------------------------------------------------------------------ coverage

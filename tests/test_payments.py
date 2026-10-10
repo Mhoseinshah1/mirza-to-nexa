@@ -9,7 +9,7 @@ import pytest
 
 from conftest import make_backup, read_jsonl, run
 from mirza2nexa.modules import payments
-from mirza2nexa.synth import DDL_INVOICE, sql_str
+from mirza2nexa.synth import DDL_INVOICE, DDL_PRODUCT, sql_str
 
 USER_DDL = ("CREATE TABLE `user` (`id` varchar(500) NOT NULL, `limit_usertest` int, `Balance` varchar(64), "
             "`User_Status` varchar(50), PRIMARY KEY (`id`));\n")
@@ -143,7 +143,46 @@ def test_unknown_status_is_unknown_and_reviewed_once_per_value(tmp_path):
     assert sorted((r["data"]["status_raw"], r["data"]["rows"]) for r in unk) == [
         ("<NULL>", 1), ("Paid", 1), ("refunded", 5)]
     assert all(r["severity"] == "warning" for r in unk)
-    assert res.report["reconciliation"]["payments"]["unknown_status"] == {"rows": 7, "distinct_values": 3}
+    assert res.report["reconciliation"]["payments"]["unknown_status"] == {
+        "rows": 7, "distinct_values": 3,
+        "top_values": [{"status_raw": "refunded", "rows": 5}, {"status_raw": "<NULL>", "rows": 1},
+                       {"status_raw": "Paid", "rows": 1}]}
+
+
+def test_unknown_status_top_values_are_bounded(tmp_path):
+    rows = [pay_row(i, status=f"st-{i:03d}") for i in range(1, 31)]
+    res = convert(tmp_path, rows)
+    u = res.report["reconciliation"]["payments"]["unknown_status"]
+    assert u["rows"] == 30 and u["distinct_values"] == 30
+    assert len(u["top_values"]) == payments.TOP_VALUES_LIMIT
+    assert u["top_values"][0] == {"status_raw": "st-001", "rows": 1}
+
+
+def test_money_unit_evidence_is_statistics_only(tmp_path):
+    product = (DDL_PRODUCT + "INSERT INTO `product` (`id`,`code_product`,`price_product`) VALUES "
+               "(1,'p1','50000'),(2,'p2','100000'),(3,'p3','x');\n")
+    rows = [pay_row(1, price="50000"), pay_row(2, price="100000"), pay_row(3, price="500000"),
+            pay_row(4, price="5000"), pay_row(5, price="70000"), pay_row(6, price="1,000"),
+            pay_row(7, price="9000", method="add balance by admin"), pay_row(8, price="50000", status="Unpaid")]
+    res = convert(tmp_path, rows, extra=product)
+    ev = res.report["reconciliation"]["money_unit_evidence"]
+    assert ev["decision"] == "OWNER" and ev["configured_unit"] == "toman"
+    d = ev["distributions"]
+    assert d["payment_customer_paid"] == {
+        "positive_values": 5, "zero_values": 0, "unparsed_values": 1, "min": "5000", "p10": "5000", "p50": "70000",
+        "p90": "100000", "max": "500000", "share_multiple_of_10": "1.0000", "share_multiple_of_100": "1.0000",
+        "share_multiple_of_1000": "1.0000"}
+    assert d["payment_admin_adjustment"]["positive_values"] == 1
+    assert d["product_price"]["positive_values"] == 2 and d["product_price"]["unparsed_values"] == 1
+    x = ev["cross_checks"]["payment_customer_paid_vs_product_price"]
+    # 50000, 100000 equal; 500000 = 10 x 50000; 5000 = 50000 / 10; 70000 matches nothing
+    assert (x["equal_to_a_reference_value"], x["equal_to_10x_a_reference_value"],
+            x["equal_to_a_reference_value_div_10"]) == (2, 1, 1)
+    assert x["share_equal"] == "0.4000" and x["median_ratio"] == "1.4000"
+    assert ev["cross_checks"]["invoice_price_vs_product_price"] is None  # no invoice table
+    assert ev["code_evidence"] and "Toman" in ev["explanation"]
+    # observations never change an amount
+    assert {r["amount"]["amount_minor"] for r in recs(res) if r["payment_id"] == "3"} == {"500000"}
 
 
 def test_unknown_method_maps_to_unknown(tmp_path):

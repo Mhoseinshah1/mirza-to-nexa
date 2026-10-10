@@ -9,7 +9,7 @@ from ..errors import PackageError, PackageTampered
 from .crypto import UnsupportedPackageVersion
 
 PACKAGE_SCHEMA = "nexa.migration.mirza"
-PACKAGE_SCHEMA_VERSION = "1.1.0"
+PACKAGE_SCHEMA_VERSION = "1.2.0"
 SUPPORTED_SCHEMA_MAJOR = 1
 PAYLOAD_FORMAT = "zip-v1"
 MIN_IMPORTER_VERSION = "1.0.0"

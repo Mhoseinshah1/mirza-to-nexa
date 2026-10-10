@@ -390,3 +390,12 @@ td.ltr { text-align: left; }
 #coverage-table .lbl { min-width: 9rem; }
 details.recon-section > summary { cursor: pointer; list-style-position: inside; }
 details.recon-section > summary h3 { display: inline-block; margin: 0 0 .3rem; }
+
+/* ---- migration readiness (Phase 3) ---- */
+.readiness.is-dryrun { background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn); }
+.readiness .readiness-reasons { margin: .4rem 0 0; padding-inline-start: 1.2rem; font-size: .88rem; font-weight: 400; color: var(--text); }
+.readiness-mini { width: 100%; margin-top: .6rem; }
+.readiness-mini h3 { font-size: .92rem; margin: .8rem 0 .3rem; }
+.readiness-tables { list-style: none; padding: 0; margin: .3rem 0; display: flex; flex-wrap: wrap; gap: .4rem; }
+.readiness-tables li { background: var(--bad-soft); color: var(--bad); border-radius: 999px; padding: .1rem .6rem; font-size: .85rem; }
+.readiness .key-code { font-family: var(--mono); font-size: .72rem; font-weight: 400; color: var(--muted); direction: ltr; unicode-bidi: isolate; margin-inline-start: .4rem; }

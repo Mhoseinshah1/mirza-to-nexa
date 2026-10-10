@@ -39,12 +39,12 @@ For each stage publish source SHA, tests run, outstanding blockers, and next gat
 ## Current state (gate tracking)
 | Gate | State | Evidence |
 |---|---|---|
-| 1 Mapping with evidence | all 48 known tables catalogued (Phase 2); 18 fork tables have operator column lists only | `docs/SOURCE_TABLES.md`, `docs/evidence/mirza_tables.json`, `docs/MAPPING.md` |
+| 1 Mapping with evidence | all 51 known tables catalogued (Phase 3 adds 3 empty fork tables); 18 fork tables have operator column lists only | `docs/SOURCE_TABLES.md`, `docs/evidence/mirza_tables.json`, `docs/MAPPING.md` |
 | 2 Archive intake + safety tests | done | `tests/test_archive.py` |
 | 3 Streaming parser + schema detection | done | `tests/test_sqldump.py`, `tests/test_conversion.py` |
-| 4 Transform + reconciliation + review queue | done incl. Phase 2 archives (payments, wallet history, services, agents, engagement, support, config) on synthetic data; v0.1.0 run on a real backup by the operator | `tests/test_*`, `tests/test_modules_contract.py`, `tests/test_perf.py` |
+| 4 Transform + reconciliation + review queue | done incl. Phase 2 archives and Phase 3 readiness (service ownership model, wallet difference causes, panel/product mapping inputs, review taxonomy) on synthetic data; real-backup re-run of v0.3.0 by the operator pending | `tests/test_*`, `tests/test_ownership.py`, `tests/test_wallet_causes.py`, `tests/test_readiness.py`, `docs/OWNERSHIP.md`, `docs/FINANCE_HISTORY.md` |
 | 5 Local Persian UI + localhost security | done | `tests/test_server.py`, `tests/test_e2e.py` |
-| 6 Package contract + importer proposal | container done; NEXA importer **not built** (needs owner approval) | `docs/NXPKG_FORMAT.md`, `docs/NEXA_IMPORTER_PLAN.md` |
+| 6 Package contract + importer proposal | content contract 1.2.0; importer **design** done, NEXA importer **not built** (needs owner approval) | `docs/NXPKG_FORMAT.md`, `docs/PACKAGE_CONTRACT.md`, `docs/NEXA_IMPORTER_DESIGN.md` |
 | 7 Rehearsal | synthetic E2E only; real/staging snapshot **not run** | — |
 
 Dev commands: `pip install -e ".[dev]"`, `ruff check src tests packaging`, `pytest`, `pytest -m e2e`, `pytest -m perf -s`.

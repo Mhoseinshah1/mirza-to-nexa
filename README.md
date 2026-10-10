@@ -20,7 +20,7 @@ Local-first, offline migration converter for password-protected ZIP archives con
 |---|---|
 | `docs/MAPPING.md` | per-entity source→target mapping, keys, validation, blockers, reconciliation |
 | `docs/SOURCE_TABLES.md`, `docs/evidence/mirza_tables.json` | all Mirza tables: cited DDL, vocabularies, sensitivity, class |
-| `docs/PACKAGE_CONTRACT.md` | package content schema 1.1.0: every file and record type |
+| `docs/PACKAGE_CONTRACT.md` | package content schema 1.2.0: every file and record type |
 | `docs/MODULES.md` | catalogue + domain-module framework and the module contract |
 | `docs/FINANCE_HISTORY.md` | payment and wallet history archives and their reconciliation |
 | `docs/SERVICES_AND_PRODUCTS.md` | service operations, panels, products/categories mapping proposal |

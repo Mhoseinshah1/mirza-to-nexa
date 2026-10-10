@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -37,6 +38,8 @@ from .payments import (
     FMT_PHP_SLASH,
     FMT_SQL_DATETIME,
     FMT_UNIX,
+    METHOD_VOCAB,
+    WALLET_CAUSE_LAST_TX,
     ZONE_NOTE,
     BoundedReviews,
     DistinctCounter,
@@ -46,6 +49,7 @@ from .payments import (
     short_text,
     sql_ident,
     time_sort_key,
+    wallet_cause_plan,
 )
 from .payments import TABLE as PAYMENT_TABLE
 
@@ -284,6 +288,7 @@ def _convert(ctx: ModuleContext, stats) -> None:
     no_customer_rows = 0
 
     state: dict[str, Any] = {}
+    diff_items: list[dict[str, Any]] = []
 
     def close_group() -> None:
         nonlocal customers_with_history, total_delta, mixed_formats
@@ -331,6 +336,8 @@ def _convert(ctx: ModuleContext, stats) -> None:
             "derived_from": ["wallet_transaction (history)", "user.Balance (snapshot, read only)"],
             "provenance": ctx.provenance(stats.name, None, None),
         })
+        if verdict in ("DIFFERS_FROM_SNAPSHOT", "ORDER_UNPROVEN") and snap is not None:
+            diff_items.append(_difference_item(conn, uid, cust, verdict, snap, last_after, delta, state))
         if verdict == "DIFFERS_FROM_SNAPSHOT":
             reviews.add(kind="wallet_history", code="WALLET_HISTORY_DIFFERS_FROM_SNAPSHOT", entity="wallet_history",
                         table=stats.name, pk=cust["telegram_user_id"] or None, severity="warning",
@@ -345,12 +352,12 @@ def _convert(ctx: ModuleContext, stats) -> None:
     conn.execute("CREATE INDEX m2n_wtx_mixed_uid ON m2n_wtx_mixed (uid)")
     cur = conn.execute(
         "SELECT w.uid, w.idtext, w.before_v, w.after_v, w.fmt, w.rec, d.n, d.first_rowno, w.rowno, "
-        "m.uid IS NOT NULL AS mixed FROM m2n_wtx w "
+        "m.uid IS NOT NULL AS mixed, w.tkey FROM m2n_wtx w "
         "LEFT JOIN m2n_wtx_dup d ON d.dkey = w.dkey "
         "LEFT JOIN m2n_wtx_mixed m ON m.uid = w.uid "
         "ORDER BY w.uid IS NULL, w.uid, CASE WHEN m.uid IS NULL THEN w.tkey END, "
         "w.idnum IS NULL, w.idnum, w.idtext, w.rowno")
-    for uid, tid, before_s, after_s, fmt, rec_json, dn, dfirst, rowno, mixed in cur:
+    for uid, tid, before_s, after_s, fmt, rec_json, dn, dfirst, rowno, mixed, tkey in cur:
         ctx.tick()
         if not state or state["uid"] != uid:
             close_group()
@@ -412,10 +419,12 @@ def _convert(ctx: ModuleContext, stats) -> None:
         state["prev_after"] = after
         state["last_after"] = after
         state["last_id"] = tid
+        state["last_tkey"] = tkey
         sink.write(rec)
         written += 1
     close_group()
     reviews.flush()
+    analyse_differences(ctx, diff_items)
     if types.rows:
         top = sorted(types.values.items(), key=lambda kv: (-kv[1], kv[0]))[:20]
         ctx.review(kind="wallet_history", code="WALLET_TX_TYPE_UNKNOWN", entity="wallet_history", table=stats.name,
@@ -516,13 +525,403 @@ def _convert(ctx: ModuleContext, stats) -> None:
     })
 
 
+# ---- Phase 3: why does a history differ from the snapshot? ------------------------------------
+# Evidence-based only. A difference is put in a cause category with a certainty:
+#   PROVEN      delta = snapshot - last balance_after equals EXACTLY the signed sum of the evidenced
+#               balance-changing events placed after the last history row, and no event is uncertain
+#               (in the time window, unplaceable, unquantified or with an unreadable amount);
+#   PROBABLE    some evidence fits (an exact sum that needs uncertain events, a 10x unit pattern, a
+#               tied last timestamp) or activity exists after the history but does not add up;
+#   UNEXPLAINED no observable evidence at all.
+# The opening balance (user.Balance) is never changed and no event is ever re-applied.
+DIFF_SCHEMA = "mirza.wallet_transaction.difference.v1"
+DIFF_RECORD_TYPE = "legacy_wallet_difference"
+EVIDENCE_REFS_LIMIT = 50
+# Local wall times have no proven zone (ZONE_NOTE). A local time L is some instant in
+# [L - 14 h, L + 12 h] (every UTC offset in use is between -12:00 and +14:00), an epoch is exact.
+# An event is AFTER the last history row only if its earliest instant is later than the row's
+# latest one, BEFORE only if its latest is earlier, otherwise IN_WINDOW. No zone is guessed.
+OFFSET_MIN_S, OFFSET_MAX_S = -12 * 3600, 14 * 3600
+_EPOCH = datetime(1970, 1, 1)  # noqa: DTZ001 - naive arithmetic on zone-less wall times
+
+# Quantified mechanisms: signed effect on user.Balance per evidenced Mirza code path.
+GROUPS = ("TOPUP", "ADMIN_ADJUSTMENT", "PURCHASE", "SERVICE_OPERATION", "WHEEL_PRIZE")
+GROUP_CAUSE = {"TOPUP": "UNLOGGED_TOPUPS", "ADMIN_ADJUSTMENT": "UNLOGGED_ADMIN_ADJUSTMENTS",
+               "PURCHASE": "UNLOGGED_PURCHASES", "SERVICE_OPERATION": "UNLOGGED_SERVICE_OPERATIONS",
+               "WHEEL_PRIZE": "UNLOGGED_WHEEL_PRIZES"}
+# Rows that prove a Balance change happened but carry no amount (or no time).
+UNQUANTIFIED = ("REFERRAL_GIFT", "GIFT_CODE", "PAYMENT_UNKNOWN_METHOD")
+CAUSES = (*GROUP_CAUSE.values(), "UNLOGGED_MIXED_ACTIVITY", "ORDER_UNPROVEN", "UNIT_SUSPECT",
+          "ACTIVITY_AFTER_HISTORY_INEXACT", "UNEXPLAINED")
+CERTAINTIES = ("PROVEN", "PROBABLE", "UNEXPLAINED")
+# service_other types that debit the wallet when paid from it (mirza_pro index.php:1821, 2093, 2294,
+# 2635, 5973, 6688). Gifts (price 0), admin renewals and transfers do not touch Balance.
+SERVICE_DEBIT_TYPES = ("extend_user", "extra_user", "extra_time_user", "extra_not_user", "extends_not_user",
+                       "change_location")
+_PK_SAFE = re.compile(r"[0-9A-Za-z_-]{1,64}")
+
+DIFF_EXPLANATION = (
+    "Each customer whose wallet_transaction history does not end at user.Balance is analysed against observable "
+    "evidence after the last history row: paid Payment_report rows (top-ups, admin adjustments), invoices "
+    "(purchases), service_other debits, wheel prizes, referral and gift-code rows. PROVEN means the difference "
+    "equals exactly the signed sum of those events with nothing uncertain; it explains the gap, it does not change "
+    "anything. user.Balance stays the only opening figure and no history is re-applied.")
+DIFF_EXPLANATION_FA = (
+    "برای هر مشتری که تاریخچه کیف پولش به موجودی بکاپ نمی‌رسد، شواهد بعد از آخرین تراکنش (پرداخت‌های موفق، تنظیم "
+    "ادمین، خرید، تمدید، گردونه، معرفی، کد هدیه) بررسی می‌شود. «اثبات‌شده» یعنی اختلاف دقیقاً برابر جمع این رویدادهاست؛ "
+    "این فقط توضیح است و موجودی بکاپ هرگز تغییر نمی‌کند.")
+
+
+def _interval(tkey: str | None) -> tuple[int, int] | None:
+    """Possible instants (seconds) of a parsed time key, without guessing a zone."""
+    if tkey is None:
+        return None
+    if tkey[0] == "U":
+        t = int(tkey[1:])
+        return t, t
+    local = int((datetime.fromisoformat(tkey[1:]) - _EPOCH).total_seconds())
+    return local - OFFSET_MAX_S, local - OFFSET_MIN_S
+
+
+def _place(ev: tuple[int, int] | None, last: tuple[int, int] | None) -> str:
+    if ev is None or last is None:
+        return "UNPLACEABLE"
+    if ev[0] > last[1]:
+        return "AFTER"
+    if ev[1] < last[0]:
+        return "BEFORE"
+    return "IN_WINDOW"
+
+
+def _difference_item(conn, uid: str, cust: dict[str, Any], verdict: str, snap: int, last_after: int | None,
+                     delta: int | None, state: dict[str, Any]) -> dict[str, Any]:
+    """What the analysis needs from one customer's history (read while the history is staged)."""
+    tkey = state.get("last_tkey")
+    if verdict == "ORDER_UNPROVEN":
+        # Some row ends exactly at the snapshot → an order exists under which the history matches.
+        match = conn.execute("SELECT 1 FROM m2n_wtx WHERE uid = ? AND after_v = ? LIMIT 1",
+                             (uid, str(snap))).fetchone() is not None
+    else:
+        # Another row with the SAME (last) timestamp ends at the snapshot: only the id tie-break
+        # made the history differ.
+        match = tkey is not None and conn.execute(
+            "SELECT 1 FROM m2n_wtx WHERE uid = ? AND tkey = ? AND after_v = ? LIMIT 1",
+            (uid, tkey, str(snap))).fetchone() is not None
+    return {"uid": uid, "cust": cust, "verdict": verdict, "snapshot": snap, "last_after": last_after,
+            "delta": delta, "last_tkey": tkey, "last_id": state.get("last_id"), "transactions": state["n"],
+            "order_match": match}
+
+
+def _pk(ctx: ModuleContext, table: str, pk: str | None) -> dict[str, Any]:
+    if pk is not None and _PK_SAFE.fullmatch(pk):
+        return {"table": table, "pk": pk}
+    return {"table": table, "pk": None, "pk_ref": ctx.secret_ref(pk, "pk")}
+
+
+def _events(ctx: ModuleContext) -> tuple[dict[str, list[tuple]], dict[str, str]]:
+    """uid → [(kind, table, pk, signed amount | None, time key | None)] for the customers in
+    ``m2n_wd_uid``; plus which evidence sources were usable."""
+    conn = ctx.conn
+    ev: dict[str, list[tuple]] = {}
+    sources: dict[str, str] = {}
+    slash = frozenset({FMT_PHP_SLASH, FMT_SQL_DATETIME, FMT_UNIX})
+
+    def table(spec: str, needed: set[str]):
+        st = next(iter(ctx.tables_for(spec)), None)
+        if st is None:
+            sources[spec] = "ABSENT"
+            return None
+        if not needed <= set(st.stored_columns):
+            sources[spec] = "COLUMNS_MISSING"
+            return None
+        sources[spec] = "USED"
+        return st
+
+    def add(uid: str, item: tuple) -> None:
+        ctx.tick()
+        ev.setdefault(uid, []).append(item)
+
+    def tk(raw: str | None) -> str | None:
+        return time_sort_key(parse_time(raw, slash))
+
+    st = table(PAYMENT_TABLE, {"id", "id_user", "price", "payment_Status", "Payment_Method", "time"})
+    if st:
+        for pid, uid, price, m_raw, t in conn.execute(
+                f"SELECT c_id, c_id_user, c_price, c_Payment_Method, c_time FROM {sql_ident(st.sql_name)} "  # noqa: S608
+                "WHERE c_payment_Status = 'paid' AND c_id_user IN (SELECT uid FROM m2n_wd_uid) ORDER BY rowno"):
+            method = METHOD_VOCAB[m_raw][0] if m_raw in METHOD_VOCAB else "UNKNOWN"
+            amount = rules.parse_price(price)[0]
+            if method == "UNKNOWN":
+                add(uid, ("PAYMENT_UNKNOWN_METHOD", st.name, pid, None, tk(t)))
+            elif method == "ADMIN_DEBIT_ADJUSTMENT":  # stored positive, debits (admin.php:3618)
+                add(uid, ("ADMIN_ADJUSTMENT", st.name, pid, None if amount is None else -amount, tk(t)))
+            elif method == "ADMIN_CREDIT_ADJUSTMENT":
+                add(uid, ("ADMIN_ADJUSTMENT", st.name, pid, amount, tk(t)))
+            else:
+                add(uid, ("TOPUP", st.name, pid, amount, tk(t)))
+    st = table("invoice", {"id_invoice", "id_user", "price_product", "time_sell"})
+    if st:
+        status = col_expr(st, "Status")
+        for key, uid, price, ts in conn.execute(
+                f"SELECT c_id_invoice, c_id_user, c_price_product, c_time_sell FROM {sql_ident(st.sql_name)} "  # noqa: S608
+                f"WHERE c_id_user IN (SELECT uid FROM m2n_wd_uid) AND COALESCE({status}, '') <> 'unpaid' "
+                "ORDER BY rowno"):
+            amount = rules.parse_price(price)[0]
+            if amount == 0:
+                continue
+            v, _note = rules.parse_time_sell(ts)
+            add(uid, ("PURCHASE", st.name, key, None if amount is None else -amount,
+                      None if v is None else f"U{v:012d}"))
+    st = table("service_other", {"id", "id_user", "price", "type", "time"})
+    if st:
+        marks = ",".join("?" * len(SERVICE_DEBIT_TYPES))
+        for sid, uid, price, t in conn.execute(
+                f"SELECT c_id, c_id_user, c_price, c_time FROM {sql_ident(st.sql_name)} "  # noqa: S608
+                f"WHERE c_id_user IN (SELECT uid FROM m2n_wd_uid) AND c_type IN ({marks}) "
+                f"AND ({col_expr(st, 'status')} IS NULL OR {col_expr(st, 'status')} = 'paid') ORDER BY rowno",
+                SERVICE_DEBIT_TYPES):
+            amount = rules.parse_price(price)[0]
+            if amount == 0:
+                continue
+            add(uid, ("SERVICE_OPERATION", st.name, sid, None if amount is None else -amount, tk(t)))
+    st = table("wheel_list", {"id", "id_user", "price", "time"})
+    if st:
+        for wid, uid, price, t in conn.execute(
+                f"SELECT c_id, c_id_user, c_price, c_time FROM {sql_ident(st.sql_name)} "  # noqa: S608
+                "WHERE c_id_user IN (SELECT uid FROM m2n_wd_uid) ORDER BY rowno"):
+            amount = rules.parse_price(price)[0]
+            if amount == 0:
+                continue  # a losing spin credits nothing (index.php:6266)
+            add(uid, ("WHEEL_PRIZE", st.name, wid, amount, tk(t)))
+    st = table("reagent_report", {"id", "user_id", "reagent", "time"})
+    if st:
+        for rid, a, b, t in conn.execute(
+                f"SELECT c_id, c_user_id, c_reagent, c_time FROM {sql_ident(st.sql_name)} "  # noqa: S608
+                "WHERE c_user_id IN (SELECT uid FROM m2n_wd_uid) OR c_reagent IN (SELECT uid FROM m2n_wd_uid) "
+                "ORDER BY rowno"):
+            for uid in dict.fromkeys(u for u in (a, b) if u is not None):
+                if conn.execute("SELECT 1 FROM m2n_wd_uid WHERE uid = ?", (uid,)).fetchone():
+                    # join gift: amount = affiliates config at the time, not stored (index.php:5866-5872)
+                    add(uid, ("REFERRAL_GIFT", st.name, rid, None, tk(t)))
+    st = table("Giftcodeconsumed", {"id", "id_user"})
+    if st:
+        for gid, uid in conn.execute(
+                f"SELECT c_id, c_id_user FROM {sql_ident(st.sql_name)} "  # noqa: S608
+                "WHERE c_id_user IN (SELECT uid FROM m2n_wd_uid) ORDER BY rowno"):
+            add(uid, ("GIFT_CODE", st.name, gid, None, None))  # no amount and no time (Q5)
+    return ev, sources
+
+
+def _empty_bucket() -> dict[str, Any]:
+    return {"count": 0, "sum": 0, "unparsed": 0}
+
+
+def _cashback_hint(delta: int | None, topups: dict[str, Any]) -> str | None:
+    t = topups["sum"]
+    if delta is None or not topups["count"] or topups["unparsed"] or t <= 0 or delta <= t:
+        return None
+    q = ((delta - t) * 100 * 100 * 2 + t) // (2 * t)  # percent with two decimals, rounded half up
+    return f"{q // 100}.{q % 100:02d}"
+
+
+def _classify(item: dict[str, Any], events: list[tuple]) -> tuple[dict[str, Any], str, str, list[tuple], bool]:
+    """(features, cause, certainty, evidence rows, uses window events)."""
+    last = _interval(item["last_tkey"])
+    places = ("AFTER", "IN_WINDOW", "UNPLACEABLE")
+    groups = {g: {p: _empty_bucket() for p in places} for g in GROUPS}
+    unq = {g: {p: 0 for p in places} for g in UNQUANTIFIED}
+    refs: list[tuple] = []
+    for kind, table, pk, amount, tkey in events:
+        place = _place(_interval(tkey), last)
+        if place == "BEFORE":
+            continue
+        refs.append((place, kind, table, pk))
+        if kind in unq:
+            unq[kind][place] += 1
+            continue
+        b = groups[kind][place]
+        b["count"] += 1
+        if amount is None:
+            b["unparsed"] += 1
+        else:
+            b["sum"] += amount
+    delta, snap, last_after = item["delta"], item["snapshot"], item["last_after"]
+    unit = {"snapshot_is_10x_history": bool(last_after) and snap == 10 * last_after,
+            "history_is_10x_snapshot": bool(snap) and last_after == 10 * snap}
+    uncertain = any(groups[g][p]["count"] for g in GROUPS for p in ("IN_WINDOW", "UNPLACEABLE")) \
+        or any(groups[g]["AFTER"]["unparsed"] for g in GROUPS) or any(n for g in unq.values() for n in g.values())
+    after_groups = [g for g in GROUPS if groups[g]["AFTER"]["count"]]
+    total_after = sum(groups[g]["AFTER"]["sum"] for g in GROUPS)
+    matches: list[str] = []
+    if delta is not None:
+        for g in GROUPS:
+            a, w = groups[g]["AFTER"], groups[g]["IN_WINDOW"]
+            if a["count"] and not a["unparsed"] and a["sum"] == delta:
+                matches.append(f"{g}_AFTER")
+            if w["count"] and not (a["unparsed"] or w["unparsed"]) and a["sum"] + w["sum"] == delta:
+                matches.append(f"{g}_AFTER_AND_WINDOW")
+        if len(after_groups) > 1 and total_after == delta:
+            matches.append("ALL_AFTER")
+        window_sum = sum(groups[g]["IN_WINDOW"]["sum"] for g in GROUPS)
+        window_n = sum(groups[g]["IN_WINDOW"]["count"] for g in GROUPS)
+        active = sum(1 for g in GROUPS if groups[g]["AFTER"]["count"] + groups[g]["IN_WINDOW"]["count"])
+        if window_n and active > 1 and total_after + window_sum == delta:
+            matches.append("ALL_AFTER_AND_WINDOW")
+    window_used = False
+    any_evidence = bool(refs)
+    if item["verdict"] == "ORDER_UNPROVEN":
+        cause = "ORDER_UNPROVEN"
+        certainty = "PROBABLE" if item["order_match"] else "UNEXPLAINED"
+    elif item["order_match"]:
+        cause, certainty = "ORDER_UNPROVEN", "PROBABLE"
+    elif after_groups and total_after == delta and not uncertain:
+        cause = GROUP_CAUSE[after_groups[0]] if len(after_groups) == 1 else "UNLOGGED_MIXED_ACTIVITY"
+        certainty = "PROVEN"
+    elif matches:
+        m = matches[0]
+        g = m.split("_AFTER")[0]
+        cause = GROUP_CAUSE.get(g, "UNLOGGED_MIXED_ACTIVITY")
+        certainty = "PROBABLE"
+        window_used = "WINDOW" in m
+    elif unit["snapshot_is_10x_history"] or unit["history_is_10x_snapshot"]:
+        cause, certainty = "UNIT_SUSPECT", "PROBABLE"
+    elif any_evidence:
+        cause, certainty = "ACTIVITY_AFTER_HISTORY_INEXACT", "PROBABLE"
+    else:
+        cause, certainty = "UNEXPLAINED", "UNEXPLAINED"
+    last_kind = None if item["last_tkey"] is None else ("LOCAL" if item["last_tkey"][0] == "L" else "UNIX")
+    features = {
+        "snapshot_minor": str(snap),
+        "history_last_balance_after_minor": None if last_after is None else str(last_after),
+        "delta_snapshot_minus_history_minor": None if delta is None else str(delta),
+        "delta_sign": None if delta is None else ("POSITIVE" if delta > 0 else "NEGATIVE"),
+        "abs_delta_minor": None if delta is None else str(abs(delta)),
+        "transactions": item["transactions"],
+        "last_transaction": {"transaction_id": item["last_id"], "time_kind": last_kind,
+                             "time": None if item["last_tkey"] is None else item["last_tkey"][1:]},
+        "groups": {g: {p: {"count": b["count"], "sum_minor": str(b["sum"]), "unparsed_amounts": b["unparsed"]}
+                       for p, b in groups[g].items()} for g in GROUPS},
+        "unquantified": unq,
+        "sum_after_all_groups_minor": str(total_after),
+        # Gateway/card cashback is credited as price * percent / 100 with no row (admin.php:1745-1750,
+        # croncard.php:49-55, payment/zarinpal.php:74-79): the excess over the later top-ups, as a percent of
+        # them, is shown for the owner to compare with PaySetting cashback values. A hint, never a cause.
+        "cashback_percent_hint": _cashback_hint(delta, groups["TOPUP"]["AFTER"]),
+        "exact_matches": matches,
+        "unit_hint": unit,
+        "order": {"verdict": item["verdict"], "a_row_with_the_last_time_or_any_order_matches_snapshot":
+                  item["order_match"]},
+    }
+    return features, cause, certainty, refs, window_used or any(r[0] == "IN_WINDOW" for r in refs)
+
+
+def analyse_differences(ctx: ModuleContext, items: list[dict[str, Any]]) -> None:
+    """``records/wallet_difference_analysis.jsonl`` + reconciliation ``wallet_differences``."""
+    conn = ctx.conn
+    conn.execute("DROP TABLE IF EXISTS m2n_wd_uid")
+    conn.execute("CREATE TEMP TABLE m2n_wd_uid (uid TEXT PRIMARY KEY)")
+    conn.executemany("INSERT OR IGNORE INTO m2n_wd_uid VALUES (?)", [(i["uid"],) for i in items])
+    events, sources = _events(ctx) if items else ({}, {})
+    conn.execute("DROP TABLE IF EXISTS m2n_wd_uid")
+    sink = ctx.open("records/wallet_difference_analysis.jsonl") if items else None
+    by_cause = dict.fromkeys(CAUSES, 0)
+    by_cert = dict.fromkeys(CERTAINTIES, 0)
+    by_pair: dict[str, int] = {}
+    actions = {"ARCHIVE_ONLY": 0, "OWNER_DECISION": 0, "NONE": 0}
+    proven_abs: dict[str, int] = {}
+    from_verdict: dict[str, int] = {}
+    window_customers = 0
+    for item in sorted(items, key=lambda i: (i["cust"]["telegram_user_id"] is None, i["cust"]["telegram_user_id"] or "",
+                                             i["uid"])):
+        ctx.tick()
+        features, cause, certainty, refs, window = _classify(item, events.get(item["uid"], []))
+        if certainty == "PROVEN":
+            action = "ARCHIVE_ONLY"
+            proven_abs[cause] = proven_abs.get(cause, 0) + abs(item["delta"])
+        elif cause == "ORDER_UNPROVEN" and certainty == "PROBABLE":
+            action = "NONE"  # an order of the same-time rows ends at the snapshot
+        else:
+            action = "OWNER_DECISION"
+        by_cause[cause] += 1
+        by_cert[certainty] += 1
+        by_pair[f"{cause}/{certainty}"] = by_pair.get(f"{cause}/{certainty}", 0) + 1
+        actions[action] += 1
+        from_verdict[item["verdict"]] = from_verdict.get(item["verdict"], 0) + 1
+        window_customers += 1 if window else 0
+        ev_refs = [{**_pk(ctx, TABLE, item["last_id"]), "role": "LAST_HISTORY_ROW"}] if item["last_id"] else []
+        for place, kind, table, pk in refs:
+            ev_refs.append({**_pk(ctx, table, pk), "role": f"{kind}_{place}"})
+        tg = item["cust"]["telegram_user_id"]
+        key = (f"legacy:wallet-difference:{tg}" if tg is not None else "legacy:wallet-difference:raw:"
+               + hashlib.sha256(item["uid"].encode("utf-8", "surrogatepass")).hexdigest()[:32])
+        sink.write({
+            "record_type": DIFF_RECORD_TYPE,
+            "schema": DIFF_SCHEMA,
+            "idempotency_key": key,
+            "customer": item["cust"],
+            "features": features,
+            "cause": cause,
+            "certainty": certainty,
+            "proposed_action": action,
+            "evidence_refs": ev_refs[:EVIDENCE_REFS_LIMIT],
+            "evidence_refs_not_listed": max(0, len(ev_refs) - EVIDENCE_REFS_LIMIT),
+            "snapshot_is_the_opening_figure": True,
+            "opening_balance_changed": False,
+            "affects_wallet": False,
+            "applied_to_balance": False,
+            "applies_to_live_state": False,
+            "provenance": ctx.provenance(TABLE, None, None),
+        })
+    decisions: list[str] = []
+    if by_cert["UNEXPLAINED"]:
+        decisions.append("WALLET_DIFF_UNEXPLAINED_REVIEW")
+    if any(n for k, n in by_pair.items() if k.endswith("/PROBABLE") and not k.startswith("ORDER_UNPROVEN")):
+        decisions.append("WALLET_DIFF_PROBABLE_CONFIRM")
+    if by_cause["UNIT_SUSPECT"]:
+        decisions.append("WALLET_DIFF_UNIT_SUSPECT_CONFIRM_UNIT")
+    if window_customers:
+        decisions.append("WALLET_DIFF_PROVE_TIME_ZONES")
+    ctx.reconciliation("wallet_differences", {
+        "status": "ANALYSED" if items else "NO_DIFFERENCES",
+        "total": len(items),
+        "from_verdict": dict(sorted(from_verdict.items())),
+        "by_cause": by_cause,
+        "by_certainty": by_cert,
+        "by_cause_and_certainty": dict(sorted(by_pair.items())),
+        "proposed_actions": actions,
+        "proven_abs_delta_by_cause_minor": {k: str(v) for k, v in sorted(proven_abs.items())},
+        "proven_abs_delta_note": "summed |delta| per cause for PROVEN differences only",
+        "unit": ctx.money_unit, "currency": ctx.currency,
+        "owner_decisions": decisions,
+        "customers_with_events_in_time_window": window_customers,
+        "evidence_sources": dict(sorted(sources.items())),
+        "time_comparison": {"local_time_offset_bounds_hours": [OFFSET_MIN_S // 3600, OFFSET_MAX_S // 3600],
+                            "rule": "AFTER iff earliest possible instant of the event > latest possible instant of "
+                                    "the last history row; local wall times span every UTC offset (zone unproven)"},
+        "certainty_rules": {
+            "PROVEN": "delta == signed sum of all quantified events AFTER the last history row; nothing in the "
+                      "window, unplaceable, unquantified or unreadable",
+            "PROBABLE": "an exact sum that needs window events or ignores another group, a 10x unit pattern, a tied "
+                        "last timestamp, or activity after the history that does not add up",
+            "UNEXPLAINED": "no observable evidence"},
+        "opening_balance_changed": False,
+        "history_reapplied": False,
+        "explanation": DIFF_EXPLANATION,
+        "explanation_fa": DIFF_EXPLANATION_FA,
+    })
+
+
 def run(ctx: ModuleContext) -> None:
     _register_messages(ctx)
+    analysed = False
     for stats in ctx.tables_for(TABLE):
         if stats.rows == 0:
             ctx.coverage(stats.name, status="empty")
             continue
         _convert(ctx, stats)
+        analysed = True
+    if not analysed:
+        analyse_differences(ctx, [])
 
 
 register_module(Module(key="wallet_history", title_fa="تاریخچه کیف پول (آرشیو و تطبیق)", run=run, order=210))
@@ -574,9 +973,13 @@ def synth_rows(state: SynthState) -> list[str]:
         return [tid, uid, uname, None, typ, amount, before, after, ref, src, reason,
                 ts.strftime("%Y-%m-%d %H:%M:%S") if ts else None]
 
+    plan = wallet_cause_plan(state)
+    planned = {p["index"] for p in plan}
     for pos, idx in enumerate(order):
         if tid >= target:
             break
+        if idx in planned:
+            continue
         uid, final = users[idx], balances[idx]
         k = rng.randint(1, 4)
         signed = [rng.choice((1, 1, -1)) * rng.randrange(1, 300) * 1000 for _ in range(k)]
@@ -610,6 +1013,14 @@ def synth_rows(state: SynthState) -> list[str]:
         chains[3].insert(1, dup)
         # unknown type, orphan customer, missing time, Persian free text
         chains.append([tx("5000000003", "mystery", 1000, 0, 1000, None, "admin", "هدیه ادمین", None, None)])
+    # customers whose history ends before later, unlogged activity (payments.wallet_cause_plan)
+    for p in plan:
+        end = p["history_end"]
+        chains.append([
+            tx(p["uid"], "deposit", 5000, end - 3000, end + 2000, None, "bot", "شارژ کیف پول",
+               WALLET_CAUSE_LAST_TX - timedelta(days=5), None),
+            tx(p["uid"], "purchase", 2000, end + 2000, end, None, "bot", "خرید سرویس", WALLET_CAUSE_LAST_TX, None),
+        ])
     for c in chains:
         for v in c:
             rows.append(f"({v[0]},{sql_str(v[1])},{sql_str(v[2])},{sql_str(v[3])},{sql_str(v[4])},{_num(v[5])},"

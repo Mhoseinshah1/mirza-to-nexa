@@ -86,6 +86,15 @@ def cmd_convert(a: argparse.Namespace) -> int:
         pkg = out_dir / res.package_path.name
         shutil.move(str(res.package_path), pkg)
         (out_dir / "report.json").write_text(json.dumps(res.report, ensure_ascii=False, indent=1), encoding="utf-8")
+        readiness_src = res.report_path.parent / "migration-readiness.json"
+        if readiness_src.is_file():  # aggregates only (no PII); the workspace is deleted below
+            from .readiness_html import render_readiness_html
+
+            readiness_doc = json.loads(readiness_src.read_text(encoding="utf-8"))
+            (out_dir / "migration-readiness.json").write_text(
+                json.dumps(readiness_doc, ensure_ascii=False, indent=1), encoding="utf-8")
+            (out_dir / "migration-readiness.html").write_text(render_readiness_html(readiness_doc), encoding="utf-8")
+            print(f"migration readiness: {out_dir / 'migration-readiness.html'}")
         if res.key_text:
             key_path = out_dir / (pkg.stem + ".nxkey")
             key_path.write_text(res.key_text + "\n", encoding="utf-8")

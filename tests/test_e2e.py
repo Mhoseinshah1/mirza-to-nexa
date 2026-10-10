@@ -388,3 +388,50 @@ def test_coverage_page_package_preview_and_persian_reports(ui, server, tmp_path)
     assert warn.is_visible() and "Importer" in (warn.text_content() or "")
     assert page.locator("[data-testid=package-files] tbody tr[data-path='records/customers.jsonl']").count() == 1
     probs.assert_clean()
+
+
+def test_migration_readiness_page_and_downloads(ui, server, tmp_path):
+    """Phase 3: «آمادگی مهاجرت به NEXA» renders every section after a synthetic conversion and
+    both downloads (JSON + script-free Persian HTML) work; no personal data appears on the page."""
+    zp, exp = make_backup(tmp_path, users=150, name="readiness.zip")
+    page, probs = ui
+    open_app(page, server)
+
+    # before any completed job the page explains itself in Persian
+    page.click("[data-testid=nav-readiness]")
+    assert PERSIAN.search(page.text_content("#readiness-empty") or "")
+
+    upload(page, zp)
+    start(page, password=None, money_unit="toman")
+    assert wait_terminal(page) == "completed"
+
+    page.click("[data-testid=nav-readiness]")
+    verdict = page.wait_for_selector("[data-testid=readiness-verdict][data-verdict]")
+    code = verdict.get_attribute("data-verdict")
+    assert code in {"NOT_READY_FOR_IMPORT", "READY_FOR_IMPORTER_DRY_RUN", "BLOCKED"}, code
+    assert PERSIAN.search(verdict.text_content() or "")
+    assert "مجوز Import نیست" in (verdict.text_content() or "")
+    assert page.is_visible("[data-testid=readiness-disclaimer]")
+    for tid in ("readiness-financial", "readiness-coverage", "readiness-ownership", "readiness-panels",
+                "readiness-review-groups", "readiness-owner-decisions", "readiness-import-blockers"):
+        assert page.is_visible(f"[data-testid={tid}]"), tid
+        assert PERSIAN.search(page.text_content(f"[data-testid={tid}]") or ""), tid
+    blockers = page.locator("[data-testid=readiness-import-blockers] li[data-code=IMPORTER_NOT_BUILT]")
+    assert blockers.count() == 1
+    assert page.locator("[data-testid=readiness-owner-decisions] li[data-decision]").count() >= 1
+
+    body = page.text_content("#view-readiness") or ""
+    tg_ids = {str(TG_BASE + n) for n in range(exp["users"])}
+    assert not set(re.findall(r"\d{6,}", body)) & tg_ids
+    assert "synthetic_user_" not in body
+
+    name, data = read_download(page, "download-readiness-json")
+    assert name.endswith(".json"), name
+    doc = json.loads(data.decode("utf-8"))
+    assert doc["verdict"]["code"] == code
+    name, data = read_download(page, "download-readiness-html")
+    assert name.endswith(".html"), name
+    html_text = data.decode("utf-8")
+    assert 'dir="rtl"' in html_text and "<script" not in html_text.lower()
+    assert not set(re.findall(r"\d{6,}", html_text)) & tg_ids
+    probs.assert_clean()

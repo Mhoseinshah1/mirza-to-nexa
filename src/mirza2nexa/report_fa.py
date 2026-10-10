@@ -20,6 +20,7 @@ import re
 from typing import Any
 
 from .catalogue import CLASS_FA
+from .review_taxonomy import GROUPS_FA as _TAXONOMY_GROUPS_FA
 
 # ---------------------------------------------------------------------------------- labels
 COVERAGE_STATUS_FA: dict[str, str] = {
@@ -357,6 +358,208 @@ IMPORTER_WARNING_FA = (
 )
 
 
+# ---- migration readiness (``migration-readiness.json``) ------------------------------------
+READINESS_DISCLAIMER_FA = (
+    "«آماده» فقط یعنی این بسته از نظر مبدل برای اجرای آزمایشی (Dry-run) یک Importer آینده مناسب است؛ "
+    "این به معنی مجوز Import در NEXA نیست. Importer نکسا هنوز ساخته نشده و هیچ داده‌ای وارد NEXA نشده است."
+)
+
+READINESS_VERDICT_FA: dict[str, str] = {
+    "NOT_READY_FOR_IMPORT": "آماده Import نیست",
+    "READY_FOR_IMPORTER_DRY_RUN": "آماده اجرای آزمایشی Importer (نه Import واقعی)",
+    "BLOCKED": "مسدود",
+}
+
+READINESS_SECTION_FA: dict[str, str] = {
+    "verdict": "نتیجه کلی",
+    "package_health": "سلامت بسته",
+    "financial": "تطبیق مالی",
+    "coverage": "پوشش جدول‌ها",
+    "ownership": "مالکیت سرویس‌ها",
+    "panels": "نگاشت پنل‌ها",
+    "review": "موارد بررسی",
+    "owner_decisions": "تصمیم‌های لازم مالک",
+    "import_blockers": "موانع Import",
+}
+
+READINESS_KEY_FA: dict[str, str] = {
+    "readiness_version": "نسخه گزارش آمادگی",
+    "converter_version": "نسخه مبدل",
+    "package_contract_version": "نسخه قرارداد بسته",
+    "import_id": "شناسه Import",
+    "generated_at": "زمان تولید",
+    "readiness": "آمادگی بسته",
+    "catalogue_ok": "فهرست جدول‌ها کامل است",
+    "balanced": "تراز مالی برقرار است",
+    "source_recount_matches": "بازشماری مستقل از بکاپ مطابق است",
+    "positive_balances": "موجودی‌های مثبت (اعتبار)",
+    "debts": "بدهی‌ها",
+    "net_minor": "خالص (کوچک‌ترین واحد)",
+    "money_unit": "واحد پول",
+    "confirmed_by": "تأییدکننده",
+    "history_differences": "اختلاف تاریخچه با موجودی فعلی",
+    "by_cause": "بر اساس علت",
+    "proven": "علت اثبات‌شده",
+    "probable": "علت محتمل",
+    "unexplained": "بدون توضیح",
+    "payments_unknown_status": "پرداخت‌های با وضعیت نامعلوم",
+    "cases_needing_review": "موارد مالی نیازمند بررسی",
+    "tables_total": "کل جدول‌ها",
+    "non_empty": "جدول‌های دارای داده",
+    "by_status": "بر اساس وضعیت",
+    "by_class": "بر اساس طبقه",
+    "uncovered": "جدول‌های پوشش‌داده‌نشده",
+    "total": "مجموع",
+    "by_decision": "بر اساس تصمیم",
+    "needs_manual_review": "نیازمند بررسی دستی",
+    "confirmed_transfers": "انتقال مالکیت تأییدشده",
+    "registry_rows": "ردیف‌های فهرست پنل",
+    "codes_in_invoices": "کدهای پنل در فاکتورها",
+    "mapped": "نگاشت‌شده",
+    "pending_mapping": "در انتظار نگاشت",
+    "status": "وضعیت",
+    "total_items": "کل موارد",
+    "distinct_records": "رکوردهای متمایز",
+    "items": "موارد",
+    "records": "رکوردها",
+    "resolvable_by_code": "قابل حل با کد",
+    "archive_only": "فقط آرشیو",
+    "owner_decision": "تصمیم مالک",
+    "adoption_time": "هنگام Adoption",
+    "auto_resolved_with_evidence": "حل خودکار با شواهد",
+    "owner_decisions_needed": "تصمیم‌های لازم مالک",
+    "adoption_stage": "موکول به مرحله Adoption",
+    "count": "تعداد",
+    "amount_minor": "مبلغ (کوچک‌ترین واحد)",
+    "currency": "واحد",
+    "blocking": "مسدودکننده",
+    "independent_recount_matches": "بازشماری مستقل مطابق است",
+    "items_per_record": "مورد به ازای هر رکورد",
+    "owner_decision_items": "موارد نیازمند تصمیم مالک",
+    "conflict_warnings_before": "هشدار تعارض (پیش از تحلیل)",
+    "conflict_warnings_after": "هشدار تعارض (پس از تحلیل)",
+    "proven_by_data": "اثبات‌شده با داده",
+}
+
+# Ownership decisions for service candidates (``convert.py`` services decisions + readiness extras).
+OWNERSHIP_DECISION_FA: dict[str, str] = {
+    # modules/ownership.py DECISIONS
+    "CONFIRMED_CURRENT_OWNER": "مالک فعلی تأییدشده",
+    "NO_CONFLICT": "بدون تعارض",
+    "AMBIGUOUS_OWNER": "مالک مبهم",
+    "INVALID_OWNER": "مالک نامعتبر",
+    "HIDDEN_SHAPE": "مالک اثبات‌شده — شکل سرویس پنهان",
+    "NAMED_PRODUCT": "مالک اثبات‌شده — محصول مشخص",
+    "PROVEN": "مالکیت اثبات‌شده",
+    "PROVEN_OWNER": "مالکیت اثبات‌شده",
+    "CONFIRMED_TRANSFER": "انتقال مالکیت تأییدشده",
+    "TRANSFER_CONFIRMED": "انتقال مالکیت تأییدشده",
+    "NEEDS_MANUAL_REVIEW": "نیازمند بررسی دستی",
+    "MANUAL_REVIEW": "نیازمند بررسی دستی",
+    "AMBIGUOUS_OWNERSHIP": "مالکیت مبهم",
+    "ORPHAN": "سرویس بدون مالک",
+    "ORPHAN_OWNER": "مالک ناموجود",
+    "CUSTOMER_NOT_IMPORTED": "مالک سرویس وارد نشده",
+    "INVALID_USERNAME": "نام کاربری پنل نامعتبر",
+    "NO_PANEL": "پنل نامشخص",
+    "UNSUPPORTED_SHAPE": "شکل سرویس پشتیبانی‌نشده",
+    "INVALID_SOURCE_ROW": "ردیف مبدأ نامعتبر",
+    "INVOICE_KEY_INVALID": "شناسه فاکتور نامعتبر",
+    "SOURCE_KEY_DUPLICATED": "کلید اصلی تکراری",
+    "TEST_INVOICE_SKIPPED": "فاکتور تست (کنار گذاشته شد)",
+    "NOT_LIVE": "غیرفعال (فقط تاریخچه)",
+}
+
+# Why a wallet's history sum differs from its current balance snapshot.
+HISTORY_CAUSE_FA: dict[str, str] = {
+    # modules/wallet_history.py CAUSES
+    "UNLOGGED_TOPUPS": "شارژهای ثبت‌نشده در تاریخچه",
+    "UNLOGGED_ADMIN_ADJUSTMENTS": "تغییرات ثبت‌نشده مدیر",
+    "UNLOGGED_PURCHASES": "خریدهای ثبت‌نشده در تاریخچه",
+    "UNLOGGED_SERVICE_OPERATIONS": "عملیات سرویس ثبت‌نشده (تمدید/افزایش)",
+    "UNLOGGED_WHEEL_PRIZES": "جایزه‌های گردونه ثبت‌نشده",
+    "UNLOGGED_MIXED_ACTIVITY": "ترکیبی از فعالیت‌های ثبت‌نشده",
+    "UNIT_SUSPECT": "احتمال ناهمخوانی واحد پول",
+    "ACTIVITY_AFTER_HISTORY_INEXACT": "فعالیت پس از تاریخچه با زمان نادقیق",
+    "MATCHES_SNAPSHOT": "مطابق با موجودی فعلی",
+    "DIFFERS_FROM_SNAPSHOT": "متفاوت با موجودی فعلی",
+    "NO_SNAPSHOT": "موجودی فعلی ندارد",
+    "ORDER_UNPROVEN": "ترتیب تراکنش‌ها اثبات‌نشده",
+    "HISTORY_UNPARSEABLE": "تاریخچه غیرقابل خواندن",
+    "HISTORY_STARTED_LATE": "شروع دیرهنگام ثبت تاریخچه",
+    "PRE_HISTORY_BALANCE": "موجودی پیش از شروع تاریخچه",
+    "MANUAL_ADMIN_ADJUSTMENT": "تغییر دستی توسط مدیر",
+    "ADMIN_ADJUSTMENT": "تغییر دستی توسط مدیر",
+    "UNLOGGED_PURCHASE": "خرید ثبت‌نشده در تاریخچه",
+    "UNLOGGED_CHANGE": "تغییر ثبت‌نشده در تاریخچه",
+    "CHAIN_GAP": "شکاف در زنجیره موجودی",
+    "CHAIN_BREAK": "گسست در زنجیره موجودی",
+    "REFUND": "بازپرداخت",
+    "ROUNDING": "گردکردن",
+    "UNIT_MISMATCH": "ناهمخوانی واحد پول",
+    "UNKNOWN": "نامعلوم",
+    "UNEXPLAINED": "بدون توضیح",
+}
+
+REVIEW_GROUP_FA: dict[str, str] = {
+    **_TAXONOMY_GROUPS_FA,
+    "financial": "مالی",
+    "wallet": "کیف پول",
+    "wallet_history": "تاریخچه کیف پول",
+    "payments": "پرداخت‌ها",
+    "debts": "بدهی‌ها",
+    "identity": "شناسه کاربران",
+    "customers": "مشتریان",
+    "services": "سرویس‌ها",
+    "ownership": "مالکیت سرویس‌ها",
+    "panels": "پنل‌ها",
+    "products": "محصولات",
+    "invoices": "فاکتورها",
+    "agents": "نمایندگی",
+    "engagement": "تعامل و بازاریابی",
+    "support": "پشتیبانی",
+    "configuration": "تنظیمات",
+    "archive": "آرشیو",
+    "tables": "جدول‌ها",
+    "data_quality": "کیفیت داده",
+    "other": "سایر",
+}
+
+PANEL_STATUS_FA: dict[str, str] = {
+    "PENDING_OWNER_MAPPING": "در انتظار نگاشت توسط مالک",
+    "MAPPED": "نگاشت کامل",
+    "PARTIALLY_MAPPED": "نگاشت ناقص",
+    "NO_PANELS": "پنلی وجود ندارد",
+    "NOT_APPLICABLE": "موضوعیت ندارد",
+}
+
+PACKAGE_READINESS_FA: dict[str, str] = {"ready": "آماده", "blocked": "مسدود"}
+
+MONEY_UNIT_FA: dict[str, str] = {"toman": "تومان", "rial": "ریال", "IRT": "تومان", "IRR": "ریال"}
+
+CONFIRMED_BY_FA: dict[str, str] = {"operator": "اپراتور", "evidence": "شواهد داخل بکاپ"}
+
+IMPORT_BLOCKER_FA: dict[str, str] = {
+    "IMPORTER_NOT_BUILT": "Importer نکسا ساخته نشده",
+    "PACKAGE_BLOCKED": "بسته مسدود است",
+    "OWNER_DECISIONS_PENDING": "تصمیم‌های مالک در انتظار",
+    "CATALOGUE_INCOMPLETE": "فهرست جدول‌ها ناقص",
+}
+
+REVIEW_ACTIONABILITY_FA: dict[str, str] = {
+    "RESOLVABLE_BY_CODE": "قابل حل با کد",
+    "ARCHIVE_ONLY": "فقط آرشیو",
+    "OWNER_DECISION": "تصمیم مالک",
+    "ADOPTION_TIME": "هنگام Adoption",
+}
+
+
+def readiness_label(table: dict[str, str], code: Any, fallback: Any = None) -> str:
+    """Persian label for a readiness code, else the server-provided Persian label, else the code."""
+    k = str(code if code is not None else "")
+    return table.get(k) or (str(fallback) if fallback else "") or humanise(k) or "—"
+
+
 def labels_payload() -> dict[str, Any]:
     """JSON served to the UI (``GET /api/labels``)."""
     return {
@@ -375,6 +578,19 @@ def labels_payload() -> dict[str, Any]:
         "entity_block_reason": ENTITY_BLOCK_REASON_FA,
         "mapping_status": MAPPING_STATUS_FA,
         "importer_warning": IMPORTER_WARNING_FA,
+        "readiness_disclaimer": READINESS_DISCLAIMER_FA,
+        "readiness_verdicts": READINESS_VERDICT_FA,
+        "readiness_sections": READINESS_SECTION_FA,
+        "readiness_keys": READINESS_KEY_FA,
+        "ownership_decisions": OWNERSHIP_DECISION_FA,
+        "history_causes": HISTORY_CAUSE_FA,
+        "review_groups": REVIEW_GROUP_FA,
+        "panel_status": PANEL_STATUS_FA,
+        "package_readiness": PACKAGE_READINESS_FA,
+        "money_units": MONEY_UNIT_FA,
+        "confirmed_by": CONFIRMED_BY_FA,
+        "import_blockers": IMPORT_BLOCKER_FA,
+        "review_actionability": REVIEW_ACTIONABILITY_FA,
     }
 
 

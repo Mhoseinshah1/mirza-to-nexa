@@ -36,7 +36,7 @@ POSITIVE_RECORD_COUNTS = ("customers", "invoices", "payments", "wallet_history",
                           "engagement", "support", "agents")
 COVERAGE_FIELDS = ("table", "status", "class", "rows", "exported", "archived", "review", "skipped",
                    "accounted_rows", "dropped_secret_columns")
-MIN_SPECS = 49
+MIN_SPECS = 52
 TIMEOUT = 1800
 
 
@@ -104,7 +104,7 @@ def convert(cmd_prefix: list[str], zip_path: Path, out: Path, env: dict[str, str
     return report, manifest
 
 
-def validate_report(report: dict, manifest: dict, label: str) -> None:
+def validate_report(report: dict, manifest: dict, label: str, out: Path | None = None) -> None:
     check(report.get("readiness") == "ready",
           f"{label}: readiness={report.get('readiness')!r} blockers={[b.get('code') for b in report.get('blockers', [])]}")
     check(report.get("blockers") == [], f"{label}: blockers present: {report.get('blockers')}")
@@ -130,6 +130,18 @@ def validate_report(report: dict, manifest: dict, label: str) -> None:
     check(manifest.get("import_id") == report.get("import_id"), f"{label}: manifest/report import_id differ")
     check(manifest.get("source_fingerprint") == report.get("source_fingerprint"),
           f"{label}: manifest/report source_fingerprint differ")
+    if out is not None:  # readiness report written next to the package (Phase 3)
+        rd_path = out / "migration-readiness.json"
+        check(rd_path.is_file(), f"{label}: migration-readiness.json not written")
+        check((out / "migration-readiness.html").is_file(), f"{label}: migration-readiness.html not written")
+        rd = json.loads(rd_path.read_text(encoding="utf-8"))
+        check(rd.get("verdict", {}).get("code") in {"NOT_READY_FOR_IMPORT", "READY_FOR_IMPORTER_DRY_RUN"},
+              f"{label}: readiness verdict {rd.get('verdict')}")
+        check(any(b.get("code") == "IMPORTER_NOT_BUILT" for b in rd.get("import_blockers", [])),
+              f"{label}: readiness must state IMPORTER_NOT_BUILT")
+        check(rd.get("ownership", {}).get("available") is True, f"{label}: readiness has no ownership section")
+        check(rd.get("review", {}).get("codes_without_explicit_rule") == {},
+              f"{label}: review codes without taxonomy rule: {rd.get('review', {}).get('codes_without_explicit_rule')}")
 
 
 def logical(report: dict, manifest: dict) -> dict:
@@ -211,7 +223,7 @@ def main() -> int:
         synth = last_json(p.stdout, "synth")
 
         rep_b, man_b = convert([exe], zip_path, tmp / "exe1", env, "B exe convert #1")
-        validate_report(rep_b, man_b, "B exe")
+        validate_report(rep_b, man_b, "B exe", tmp / "exe1")
         rc = man_b["record_counts"]
         check(rc.get("payments") == synth.get("payments"),
               f"B exe: payments {rc.get('payments')} != synthetic {synth.get('payments')}")
@@ -220,7 +232,7 @@ def main() -> int:
         lb = logical(rep_b, man_b)
 
         rep_c, man_c = convert([sys.executable, "-m", "mirza2nexa"], zip_path, tmp / "py", env, "C python convert")
-        validate_report(rep_c, man_c, "C python")
+        validate_report(rep_c, man_c, "C python", tmp / "py")
         compare(logical(rep_c, man_c), lb, "C python (left) vs exe (right)")
 
         for i in (2, 3):
