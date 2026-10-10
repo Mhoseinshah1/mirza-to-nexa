@@ -27,3 +27,6 @@ __pycache__/
 .venv/
 coverage/
 *.log
+*.egg-info/
+*.nxkey
+.ruff_cache/
