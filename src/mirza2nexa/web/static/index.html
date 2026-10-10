@@ -44,6 +44,7 @@
         <li><button type="button" class="nav-item" data-view="new" data-testid="nav-new"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg><span>بکاپ جدید</span></button></li>
         <li><button type="button" class="nav-item" data-view="status" data-testid="nav-status"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3a9 9 0 1 0 9 9h-2a7 7 0 1 1-7-7zm-1 4v6l5 3 .8-1.3-4.3-2.5V7z"/></svg><span>وضعیت تبدیل</span><span class="nav-badge" id="nav-status-badge" hidden></span></button></li>
         <li><button type="button" class="nav-item" data-view="report" data-testid="nav-report"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9h3v10H5zm5.5-4h3v14h-3zM16 13h3v6h-3z"/></svg><span>آمار و گزارش</span></button></li>
+        <li><button type="button" class="nav-item" data-view="coverage" data-testid="nav-coverage"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h18v4H3zm0 7h8v11H3zm10 0h8v4h-8zm0 7h8v4h-8z"/></svg><span>پوشش جدول‌ها</span></button></li>
         <li><button type="button" class="nav-item" data-view="review" data-testid="nav-review"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v2H3zm0 6h12v2H3zm0 6h18v2H3z"/></svg><span>صف بررسی</span></button></li>
         <li><button type="button" class="nav-item" data-view="preview" data-testid="nav-preview"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5C6 5 2 12 2 12s4 7 10 7 10-7 10-7-4-7-10-7zm0 11a4 4 0 1 1 0-8 4 4 0 0 1 0 8z"/></svg><span>پیش‌نمایش خروجی</span></button></li>
         <li><button type="button" class="nav-item" data-view="download" data-testid="nav-download"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3h2v10l3.5-3.5 1.4 1.4L12 16.8l-5.9-5.9 1.4-1.4L11 13zM4 19h16v2H4z"/></svg><span>دانلود بسته</span></button></li>
@@ -285,7 +286,10 @@
           <h1 id="h-report">آمار و گزارش</h1>
           <p class="muted">نتیجه تبدیل، تطبیق مالی و موارد مسدودکننده.</p>
         </div>
-        <a class="btn btn-secondary" id="report-download" data-testid="report-download" download hidden>دانلود گزارش JSON</a>
+        <div class="actions head-actions">
+          <a class="btn btn-primary" id="download-report-html" data-testid="download-report-html" download hidden>دانلود گزارش فارسی (HTML)</a>
+          <a class="btn btn-secondary" id="report-download" data-testid="report-download" download hidden>دانلود گزارش JSON</a>
+        </div>
       </header>
       <div class="empty card" id="report-empty">گزارش پس از کامل شدن تبدیل در دسترس است.</div>
       <div id="report-body" hidden>
@@ -294,12 +298,20 @@
           <h2>شناسه‌ها و واحد پول</h2>
           <dl class="kv-grid" id="report-meta"></dl>
         </div>
+        <div class="card importer-warning" data-testid="report-importer-warning" role="note">
+          <strong>Importer نکسا هنوز ساخته نشده است.</strong>
+          <span>این بسته یک قرارداد پیشنهادی است و قابلیت ورود آن به NEXA تأیید نشده است.</span>
+        </div>
+        <div class="stat-grid" id="history-cards" data-testid="history-cards" hidden></div>
         <h2 class="section-title">تعداد رکوردها</h2>
         <div class="stat-grid" id="count-cards" data-testid="count-cards"></div>
+        <div class="grid-3" id="class-sections" data-testid="class-sections"></div>
         <div class="grid-2">
           <div class="card">
             <h2>موارد مسدودکننده <span class="pill pill-bad num" id="blocker-count">۰</span></h2>
-            <ul class="issue-list" id="blocker-list" data-testid="blocker-list"></ul>
+            <div id="blocker-groups" data-testid="blocker-groups"></div>
+            <ul class="issue-list" id="blocker-list" data-testid="blocker-list" hidden></ul>
+            <div id="blocked-entities" data-testid="blocked-entities"></div>
           </div>
           <div class="card">
             <h2>هشدارها <span class="pill pill-warn num" id="warning-count">۰</span></h2>
@@ -307,7 +319,8 @@
           </div>
         </div>
         <div class="card">
-          <h2>تطبیق مالی</h2>
+          <h2>تطبیق مالی و کنترل‌ها</h2>
+          <p class="muted small">هر بخش با برچسب فارسی نمایش داده می‌شود؛ کد فنی هر مورد به‌صورت کوچک کنار آن آمده است.</p>
           <div id="reconciliation" data-testid="reconciliation"></div>
         </div>
         <div class="card">
@@ -326,6 +339,46 @@
         <div class="card">
           <h2>تشخیص نسخه ساختار</h2>
           <div id="schema-body" data-testid="schema"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4b. Coverage -->
+    <section class="view" id="view-coverage" data-view-name="coverage" aria-labelledby="h-coverage" hidden>
+      <header class="view-head">
+        <div>
+          <h1 id="h-coverage">پوشش جدول‌ها</h1>
+          <p class="muted">سرنوشت تک‌تک جدول‌های بکاپ: چه چیزی منتقل شد، چه چیزی آرشیو شد و چه چیزی هنوز پوشش داده نشده است.</p>
+        </div>
+        <a class="btn btn-secondary" id="download-coverage-csv" data-testid="download-coverage-csv" download hidden>دانلود CSV پوشش (Excel)</a>
+      </header>
+      <div class="empty card" id="coverage-empty">پوشش جدول‌ها پس از کامل شدن تبدیل در دسترس است.</div>
+      <div id="coverage-body" hidden>
+        <div class="stat-grid" id="coverage-summary" data-testid="coverage-summary"></div>
+        <div class="card uncovered-card" id="uncovered-card" role="note">
+          <h2>جدول‌های پوشش‌داده‌نشده <span class="pill pill-bad num" id="uncovered-count">۰</span></h2>
+          <p class="muted small">جدول‌هایی که طبقه‌بندی ندارند یا مسدود شده‌اند؛ تا تعیین تکلیف، بسته قابل Import نیست.</p>
+          <ul class="issue-list" id="uncovered-list" data-testid="uncovered-list"></ul>
+        </div>
+        <form class="card filters" id="coverage-filters" novalidate>
+          <div class="field inline">
+            <label for="coverage-class">طبقه</label>
+            <select id="coverage-class" data-testid="coverage-class"><option value="">همه</option></select>
+          </div>
+          <div class="field inline">
+            <label for="coverage-status">وضعیت</label>
+            <select id="coverage-status" data-testid="coverage-status"><option value="">همه</option></select>
+          </div>
+          <span class="muted small" id="coverage-shown" aria-live="polite"></span>
+        </form>
+        <div class="card">
+          <div class="table-wrap">
+            <table class="table" id="coverage-table" data-testid="coverage-table">
+              <caption class="sr-only">پوشش جدول‌های بکاپ</caption>
+              <thead><tr><th scope="col">جدول</th><th scope="col">طبقه</th><th scope="col">وضعیت</th><th scope="col">ردیف</th><th scope="col">خروجی / آرشیو / بررسی / کنار</th><th scope="col">ستون‌ها و خانه‌ها</th></tr></thead>
+              <tbody id="coverage-tbody"></tbody>
+            </table>
+          </div>
         </div>
       </div>
     </section>
@@ -420,6 +473,25 @@
           <p>کلید بسته را جداگانه ذخیره کنید؛ بدون آن بسته باز نمی‌شود و این کلید فقط در همین نشست در دسترس است.</p>
           <p class="small">کلید را کنار بسته نگه ندارید و از طریق پیام‌رسان یا ایمیل ارسال نکنید.</p>
           <a class="btn btn-warn" id="download-key" data-testid="download-key" download>دانلود کلید بسته (‎.nxkey‎)</a>
+        </div>
+        <div class="card" id="package-preview" data-testid="package-preview" hidden>
+          <div class="card-head">
+            <h2>پیش‌نمایش کامل بسته</h2>
+            <span class="contract-version">نسخه قرارداد بسته: <bdi dir="ltr" class="mono" id="contract-version" data-testid="contract-version">—</bdi></span>
+          </div>
+          <div class="importer-warning" id="importer-warning" data-testid="importer-warning" role="alert">
+            <strong>هشدار: Importer نکسا هنوز ساخته نشده است.</strong>
+            <span>قالب این بسته یک قرارداد پیشنهادی است و قابلیت ورود (Import) آن به NEXA تأیید نشده است. از این بسته در سرور اصلی استفاده نکنید.</span>
+          </div>
+          <dl class="kv-grid" id="package-preview-meta"></dl>
+          <div id="package-preview-blockers"></div>
+          <h3 class="small">فایل‌های داخل بسته</h3>
+          <div class="table-wrap">
+            <table class="table table-compact" id="package-files" data-testid="package-files">
+              <thead><tr><th scope="col">مسیر</th><th scope="col">بخش</th><th scope="col">رکورد</th><th scope="col">حجم</th><th scope="col">SHA-256</th></tr></thead>
+              <tbody id="package-files-tbody"></tbody>
+            </table>
+          </div>
         </div>
         <div class="card">
           <h2>بسته مهاجرت</h2>

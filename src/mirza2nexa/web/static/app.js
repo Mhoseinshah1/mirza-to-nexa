@@ -173,7 +173,50 @@
   const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
   const ACTIVE = new Set(['queued', 'running']);
   const PRESTART = new Set(['uploaded', 'awaiting_password']);
-  const entityLabel = (k) => ENTITY_FA[k] || k;
+  // Persian labels shared with the downloadable report; loaded from /api/labels at boot.
+  // These defaults keep the UI usable (and Persian) if that request fails.
+  const L = {
+    coverage_status: { executed: 'اجرا شد', archived: 'آرشیو شد', review: 'نیازمند بررسی', blocked: 'مسدود', empty: 'بدون داده', excluded: 'غیرقابل انتقال' },
+    coverage_status_help: {},
+    classes: {},
+    readiness: { ready: 'آماده بررسی Importer', blocked: 'مسدود' },
+    entities: {},
+    keys: {},
+    key_help: {},
+    review_codes: {},
+    review_kinds: {},
+    blocker_codes: {},
+    blocker_categories: { financial: 'مالی', schema: 'ساختار داده (Schema)', data_quality: 'کیفیت داده', security: 'امنیت' },
+    blocker_category: {},
+    entity_block_reason: {},
+    mapping_status: {},
+  };
+  const own = (o, k) => (o && Object.prototype.hasOwnProperty.call(o, k) ? o[k] : undefined);
+  function humanise(k) {
+    const s = String(k).replace(/[_.]+/g, ' ').trim();
+    return s || String(k);
+  }
+  const entityLabel = (k) => ENTITY_FA[k] || own(L.entities, k) || own(L.keys, k) || humanise(k);
+  const keyLabel = (k) => own(L.keys, k) || own(L.entities, k) || ENTITY_FA[k] || humanise(k);
+  const classLabel = (c, fa) => fa || own(L.classes, c) || (c ? humanise(c) : 'طبقه‌بندی‌نشده');
+  const covStatusLabel = (s) => own(L.coverage_status, s) || humanise(s || '—');
+  function blockerCategory(code) {
+    const c = String(code || '');
+    const known = own(L.blocker_category, c);
+    if (known) return known;
+    const up = c.toUpperCase();
+    if (/SECRET|SECUR|TOKEN|CREDENTIAL|PASSWORD|PRIVATE/.test(up)) return 'security';
+    if (/MONEY|FINANC|BALANCE|WALLET|PAYMENT|LEDGER|RECONCIL|RECOUNT|AMOUNT|DEBT|CURRENCY/.test(up)) return 'financial';
+    if (/SCHEMA|TABLE|COLUMN|UNCLASSIFIED|VERSION/.test(up)) return 'schema';
+    return 'data_quality';
+  }
+  /** Persian label with the technical code shown small next to it (and an optional explanation). */
+  function labelWithCode(label, code, help) {
+    return el('span', { class: 'lbl' },
+      el('span', { class: 'lbl-text', text: label }),
+      code !== undefined && code !== null && String(code) !== label ? el('span', { class: 'key-code', text: String(code) }) : null,
+      help ? el('span', { class: 'key-help', text: help }) : null);
+  }
   const statusLabel = (s) => STATUS_FA[s] || s || '—';
 
   // ------------------------------------------------------------------ state
@@ -357,7 +400,7 @@
   }
 
   // ------------------------------------------------------------------ navigation
-  const VIEWS = ['dashboard', 'new', 'status', 'report', 'review', 'preview', 'download', 'history', 'settings'];
+  const VIEWS = ['dashboard', 'new', 'status', 'report', 'coverage', 'review', 'preview', 'download', 'history', 'settings'];
   const onShow = {};
 
   function go(view, opts) {
@@ -1051,6 +1094,7 @@
     $('report-body').hidden = true;
     $('report-empty').hidden = false;
     $('report-download').hidden = true;
+    $('download-report-html').hidden = true;
     $('report-empty').textContent = notReadyMessage('گزارش');
     if (!S.job || S.job.status !== 'completed') return;
     $('report-empty').textContent = 'در حال بارگذاری گزارش…';
@@ -1063,6 +1107,9 @@
       const a = $('report-download');
       a.href = jobPath(S.job.id, '/report/download');
       a.hidden = false;
+      const h = $('download-report-html');
+      h.href = jobPath(S.job.id, '/report.html');
+      h.hidden = false;
     } catch (e) {
       $('report-empty').textContent = notReadyMessage('گزارش');
       if (e.status !== 401) showError(e);
@@ -1124,6 +1171,9 @@
       cards.append(card);
     }
 
+    renderHistoryCards(r);
+    renderClassSections(r.coverage || []);
+    renderBlockerGroups(r.blockers || [], r.mapping || []);
     renderIssues($('blocker-list'), r.blockers || [], 'blocker');
     renderIssues($('warning-list'), r.warnings || [], 'warning');
     $('blocker-count').textContent = fmtNum((r.blockers || []).length);
@@ -1135,20 +1185,13 @@
     const recon = r.reconciliation || {};
     const secs = Object.keys(recon);
     if (!secs.length) rec.append(el('p', { class: 'muted', text: 'اطلاعات تطبیق مالی موجود نیست.' }));
-    for (const sec of secs) {
-      const val = recon[sec];
-      const tbody = el('tbody');
-      if (val && typeof val === 'object' && !Array.isArray(val)) {
-        for (const k of Object.keys(val)) {
-          tbody.append(el('tr', { 'data-key': k }, el('th', { scope: 'row', class: 'ltr', text: k }), el('td', { class: 'num' }, reconValue(val[k]))));
-        }
-      } else {
-        tbody.append(el('tr', null, el('th', { scope: 'row', text: '—' }), el('td', { class: 'num', text: fmtNum(val) })));
-      }
-      rec.append(el('div', { class: 'recon-section', 'data-section': sec },
-        el('h3', { text: entityLabel(sec) }),
-        el('div', { class: 'table-wrap' }, el('table', { class: 'table' }, tbody))));
-    }
+    secs.forEach((sec, i) => {
+      const d = el('details', { class: 'recon-section', 'data-section': sec },
+        el('summary', null, el('h3', null, labelWithCode(entityLabel(sec), sec))),
+        el('div', { class: 'table-wrap' }, reconTable(recon[sec], 0)));
+      if (i === 0 || sec === 'wallet') d.open = true;
+      rec.append(d);
+    });
 
     // mapping
     const mt = $('mapping-tbody');
@@ -1159,7 +1202,7 @@
         el('td', { class: 'ltr', text: m.source_table || '—' }),
         el('td', null, tagList(m.source_columns || [])),
         el('td', { class: 'ltr', text: m.target || '—' }),
-        el('td', null, el('span', { class: 'badge st-' + m.status, text: MAPPING_FA[m.status] || m.status })),
+        el('td', null, el('span', { class: 'badge st-' + m.status, text: MAPPING_FA[m.status] || own(L.mapping_status, m.status) || m.status })),
         el('td', { class: 'small', text: m.note || '' })));
     }
     if (!(r.mapping || []).length) mt.append(el('tr', null, el('td', { colspan: 6, class: 'empty', text: 'اطلاعات نگاشت موجود نیست.' })));
@@ -1263,7 +1306,275 @@
     box.append(dl,
       el('h3', { class: 'small', text: 'جداول شناخته‌شده' }), tagList(sp.matched_tables),
       el('h3', { class: 'small', text: 'جداول مورد انتظار اما موجود نیست' }), tagList(sp.missing_tables, 'is-bad'),
-      el('h3', { class: 'small', text: 'جداول ناشناخته (نادیده گرفته می‌شوند)' }), tagList(sp.unknown_tables, 'is-warn'));
+      el('h3', { class: 'small', text: 'جداول ناشناخته (جزئیات در «پوشش جدول‌ها»)' }), tagList(sp.unknown_tables, 'is-warn'));
+  }
+
+  // ------------------------------------------------------------------ report (phase 2 parts)
+  function reconTable(val, depth) {
+    const tbody = el('tbody');
+    if (val && typeof val === 'object' && !Array.isArray(val)) {
+      for (const k of Object.keys(val)) {
+        tbody.append(el('tr', { 'data-key': k },
+          el('th', { scope: 'row' }, labelWithCode(keyLabel(k), k, own(L.key_help, k))),
+          el('td', { class: 'num' }, reconCell(val[k], depth + 1))));
+      }
+      if (!Object.keys(val).length) tbody.append(el('tr', null, el('td', { class: 'muted', text: '—' })));
+    } else {
+      tbody.append(el('tr', null, el('th', { scope: 'row', text: '—' }), el('td', { class: 'num' }, reconCell(val, depth + 1))));
+    }
+    return el('table', { class: 'table recon-table' }, tbody);
+  }
+
+  function reconCell(v, depth) {
+    if (typeof v === 'boolean') return el('span', { class: 'bool ' + (v ? 'is-yes' : 'is-no'), text: v ? 'بله' : 'خیر' });
+    if (v === null || v === undefined) return document.createTextNode('—');
+    if (Array.isArray(v)) {
+      if (!v.length) return document.createTextNode('—');
+      if (v.every((x) => x === null || typeof x !== 'object')) return tagList(v.slice(0, 100));
+      return el('div', null, v.slice(0, 50).map((x) => reconTable(x, depth)));
+    }
+    if (typeof v === 'object') return depth > 4 ? reconValue(v) : reconTable(v, depth);
+    if (typeof v === 'string' && !/^-?\d+(\.\d+)?$/.test(v)) {
+      const lbl = own(L.keys, v);
+      return lbl ? labelWithCode(lbl, v) : el('span', { class: 'ltr-text', text: v });
+    }
+    return document.createTextNode(fmtNum(v));
+  }
+
+  function firstCount(v) {
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    if (typeof v === 'string' && /^\d+$/.test(v)) return Number(v);
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      for (const k of ['count', 'records', 'total', 'rows']) {
+        const x = firstCount(v[k]);
+        if (x !== null) return x;
+      }
+    }
+    return null;
+  }
+
+  /** Historical payment / wallet transaction totals, if a module reported them. */
+  function historyCount(r, countKeys, reconKeys, fields) {
+    const counts = r.counts || {};
+    for (const k of countKeys) {
+      const c = counts[k];
+      if (c !== undefined && c !== null) {
+        const n = typeof c === 'object' ? firstCount(c.converted !== undefined ? c.converted : c.source) : firstCount(c);
+        if (n !== null) return n;
+      }
+    }
+    const recon = r.reconciliation || {};
+    for (const k of reconKeys) {
+      const sec = recon[k];
+      if (!sec || typeof sec !== 'object') continue;
+      for (const f of fields) {
+        const n = firstCount(sec[f]);
+        if (n !== null) return n;
+      }
+    }
+    return null;
+  }
+
+  function renderHistoryCards(r) {
+    const box = $('history-cards');
+    clear(box);
+    const fields = ['records', 'exported', 'archived', 'transactions', 'total', 'count', 'source_rows', 'rows'];
+    const items = [
+      ['history-payments', 'پرداخت‌های تاریخی', 'فقط سابقه؛ پرداخت یا درآمد جدید ساخته نمی‌شود.',
+        historyCount(r, ['payments', 'historical_payments'], ['payments'], ['historical_payments', ...fields])],
+      ['history-wallet', 'تراکنش‌های کیف پول', 'تاریخچه فقط‌خواندنی؛ موجودی فقط از Snapshot ساخته می‌شود.',
+        historyCount(r, ['wallet_history', 'wallet_transactions'], ['wallet_history'], ['wallet_transactions', ...fields])],
+    ];
+    for (const [tid, label, help, n] of items) {
+      if (n === null) continue;
+      box.append(el('div', { class: 'card count-card', 'data-testid': tid },
+        el('h3', { text: label }), el('div', { class: 'big num', text: fmtNum(n) }), el('div', { class: 'muted small', text: help })));
+    }
+    box.hidden = !box.childElementCount;
+  }
+
+  const SECTION_DEFS = [
+    ['OPERATIONAL', 'section-operational', 'عملیاتی', 'وارد بخش‌های فعال NEXA می‌شود (پس از تأیید Importer).'],
+    ['ARCHIVE', 'section-archive', 'آرشیو', 'فقط برای سابقه و جست‌وجو؛ هیچ اثری روی موجودی یا سرویس ندارد.'],
+    ['REVIEW', 'section-review', 'نیازمند بررسی', 'نگه داشته شده تا مالک NEXA درباره آن تصمیم بگیرد.'],
+  ];
+
+  function renderClassSections(coverage) {
+    const box = $('class-sections');
+    clear(box);
+    for (const [klass, tid, title, help] of SECTION_DEFS) {
+      const rows = coverage.filter((c) => c && c.class === klass);
+      const sum = (f) => rows.reduce((a, c) => a + (Number(c[f]) || 0), 0);
+      const list = el('ul', { class: 'mini-list' });
+      for (const c of rows.slice(0, 12)) {
+        list.append(el('li', { 'data-table': c.table },
+          el('bdi', { dir: 'ltr', class: 'mono', text: c.table }),
+          el('span', { class: 'badge cov-' + c.status, text: covStatusLabel(c.status) }),
+          el('span', { class: 'muted small num', text: fmtNum(c.rows) + ' ردیف' })));
+      }
+      if (rows.length > 12) list.append(el('li', { class: 'muted small', text: '+' + fmtNum(rows.length - 12) + ' جدول دیگر (در «پوشش جدول‌ها»)' }));
+      if (!rows.length) list.append(el('li', { class: 'muted small', text: 'جدولی در این بخش نیست.' }));
+      box.append(el('div', { class: 'card class-section', 'data-testid': tid, 'data-class': klass },
+        el('h2', null, title, ' ', el('span', { class: 'pill num', text: fmtNum(rows.length) + ' جدول' })),
+        el('p', { class: 'muted small', text: help }),
+        el('div', { class: 'sub-stats small' },
+          el('span', null, 'ردیف: ', el('b', { class: 'num', text: fmtNum(sum('rows')) })),
+          el('span', null, 'خروجی: ', el('b', { class: 'num', text: fmtNum(sum('exported')) })),
+          el('span', null, 'آرشیو: ', el('b', { class: 'num', text: fmtNum(sum('archived')) })),
+          el('span', null, 'بررسی: ', el('b', { class: 'num', text: fmtNum(sum('review')) }))),
+        list));
+    }
+  }
+
+  function renderBlockerGroups(blockers, mapping) {
+    const box = $('blocker-groups');
+    clear(box);
+    if (!blockers.length) box.append(el('p', { class: 'muted', text: 'موردی وجود ندارد.' }));
+    const groups = {};
+    for (const b of blockers) (groups[blockerCategory(b.code)] = groups[blockerCategory(b.code)] || []).push(b);
+    for (const cat of ['financial', 'schema', 'data_quality', 'security']) {
+      const items = groups[cat];
+      if (!items) continue;
+      const ul = el('ul', { class: 'issue-list' });
+      for (const it of items) {
+        ul.append(el('li', { 'data-code': it.code, 'data-severity': 'blocker' },
+          el('span', { class: 'msg' },
+            el('strong', { text: own(L.blocker_codes, it.code) || humanise(it.code || '') }),
+            el('span', { class: 'block', text: it.message || '' })),
+          it.count !== undefined && it.count !== null ? el('span', { class: 'pill num pill-bad', text: fmtNum(it.count) + ' مورد' }) : null,
+          el('span', { class: 'error-code', text: it.code || '' })));
+      }
+      box.append(el('div', { class: 'blocker-group', 'data-category': cat },
+        el('h3', { class: 'small' }, labelWithCode(own(L.blocker_categories, cat) || cat, null)), ul));
+    }
+    const ents = $('blocked-entities');
+    clear(ents);
+    const blocked = mapping.filter((m) => m && m.status === 'blocked');
+    if (!blocked.length) return;
+    const ul = el('ul', { class: 'issue-list' });
+    for (const m of blocked) {
+      ul.append(el('li', { 'data-entity': m.entity },
+        el('span', { class: 'msg' }, el('strong', { text: entityLabel(m.entity) + ': ' }),
+          own(L.entity_block_reason, m.entity) || m.note || '—'),
+        el('span', { class: 'error-code', text: m.entity })));
+    }
+    ents.append(el('h3', { class: 'small', text: 'بخش‌های مسدود و دلیل' }), ul);
+  }
+
+  // ------------------------------------------------------------------ coverage
+  const COV_STATUSES = ['executed', 'archived', 'review', 'blocked', 'empty', 'excluded'];
+  const COV_CLASSES = ['OPERATIONAL', 'ARCHIVE', 'REVIEW', 'CONFIGURATION', 'EXCLUDED'];
+  const isUncovered = (c) => c.status === 'blocked' || !c.class;
+
+  onShow.coverage = async function () {
+    $('coverage-body').hidden = true;
+    $('coverage-empty').hidden = false;
+    $('download-coverage-csv').hidden = true;
+    $('coverage-empty').textContent = notReadyMessage('پوشش جدول‌ها');
+    if (!S.job || S.job.status !== 'completed') return;
+    $('coverage-empty').textContent = 'در حال بارگذاری…';
+    try {
+      const r = await ensureReport();
+      if (S.view !== 'coverage' || !r) return;
+      renderCoverage(r.coverage || []);
+      const a = $('download-coverage-csv');
+      a.href = jobPath(S.job.id, '/coverage.csv');
+      a.hidden = false;
+      $('coverage-empty').hidden = true;
+      $('coverage-body').hidden = false;
+    } catch (e) {
+      $('coverage-empty').textContent = notReadyMessage('پوشش جدول‌ها');
+      if (e.status !== 401) showError(e);
+    }
+  };
+
+  function fillSelect(sel, values, labelOf) {
+    const keep = sel.value;
+    clear(sel);
+    sel.append(el('option', { value: '', text: 'همه' }));
+    for (const v of values) sel.append(el('option', { value: v, text: labelOf(v) }));
+    if (keep && values.includes(keep)) sel.value = keep;
+  }
+
+  function renderCoverage(coverage) {
+    const rows = coverage.filter((c) => c && typeof c === 'object');
+    // summary cards
+    const sum = $('coverage-summary');
+    clear(sum);
+    const card = (tid, label, n, cls) =>
+      el('div', { class: 'card stat ' + (cls || ''), 'data-testid': tid },
+        el('div', { class: 'stat-label', text: label }), el('div', { class: 'stat-value num', text: fmtNum(n) }));
+    sum.append(card('cov-total', 'کل جدول‌ها', rows.length), card('cov-nonempty', 'جدول‌های دارای داده', rows.filter((c) => Number(c.rows) > 0).length));
+    const classes = [...new Set([...COV_CLASSES.filter((k) => rows.some((c) => c.class === k)), ...rows.map((c) => c.class || '')])];
+    for (const k of classes) {
+      const n = rows.filter((c) => (c.class || '') === k).length;
+      if (n) sum.append(card('cov-class-' + (k || 'none'), 'طبقه: ' + classLabel(k || null), n, k ? '' : 'is-bad'));
+    }
+    const statuses = [...new Set([...COV_STATUSES.filter((s) => rows.some((c) => c.status === s)), ...rows.map((c) => String(c.status))])];
+    for (const s of statuses) {
+      const n = rows.filter((c) => String(c.status) === s).length;
+      if (n) sum.append(card('cov-status-' + s, 'وضعیت: ' + covStatusLabel(s), n, s === 'blocked' ? 'is-bad' : ''));
+    }
+
+    // uncovered
+    const un = rows.filter(isUncovered);
+    const ul = $('uncovered-list');
+    clear(ul);
+    $('uncovered-count').textContent = fmtNum(un.length);
+    $('uncovered-card').classList.toggle('is-clear', !un.length);
+    if (!un.length) ul.append(el('li', { class: 'none', text: 'همه جدول‌ها طبقه‌بندی و تعیین تکلیف شده‌اند.' }));
+    for (const c of un) {
+      ul.append(el('li', { 'data-table': c.table, 'data-severity': 'blocker' },
+        el('bdi', { dir: 'ltr', class: 'mono', text: c.table }),
+        el('span', { class: 'pill num pill-bad', text: fmtNum(c.rows) + ' ردیف' }),
+        el('span', { class: 'msg' },
+          !c.class ? 'جدول در فهرست جدول‌های شناخته‌شده نیست؛ معنی آن ثابت نشده و هیچ داده‌ای از آن منتقل نشد.' : own(L.coverage_status_help, 'blocked') || '',
+          c.reason || c.reason_blocked ? el('span', { class: 'block small muted ltr-text', text: [c.reason, c.reason_blocked].filter(Boolean).join(' — ') }) : null)));
+    }
+
+    fillSelect($('coverage-class'), classes, (k) => classLabel(k || null));
+    fillSelect($('coverage-status'), statuses, covStatusLabel);
+    S.coverage = rows;
+    renderCoverageTable();
+  }
+
+  function renderCoverageTable() {
+    const rows = S.coverage || [];
+    const fc = $('coverage-class').value;
+    const fs = $('coverage-status').value;
+    const shown = rows.filter((c) => (!fc || (c.class || '') === fc) && (!fs || String(c.status) === fs));
+    const tbody = $('coverage-tbody');
+    clear(tbody);
+    for (const c of shown) {
+      const dropped = c.dropped_secret_columns || [];
+      const counts = el('div', { class: 'sub-stats small' });
+      for (const [k, lbl] of [['exported', 'خروجی'], ['archived', 'آرشیو'], ['review', 'بررسی'], ['skipped', 'کنار']]) {
+        counts.append(el('span', { class: Number(c[k]) ? '' : 'muted' }, lbl + ': ', el('b', { class: 'num', text: fmtNum(c[k] || 0) })));
+      }
+      const explain = el('div', { class: 'small' });
+      if (c.purpose_fa) explain.append(el('div', { text: c.purpose_fa }));
+      if (c.status && own(L.coverage_status_help, c.status)) explain.append(el('div', { class: 'muted', text: own(L.coverage_status_help, c.status) }));
+      if (c.reason) explain.append(el('div', { class: 'muted ltr-text' }, el('span', { text: 'توضیح: ' }), el('span', { text: c.reason })));
+      if (c.reason_blocked) explain.append(el('div', { class: 'warn-text ltr-text', text: c.reason_blocked }));
+      if (c.nexa_target) explain.append(el('div', { class: 'muted' }, 'مقصد NEXA: ', el('bdi', { dir: 'ltr', class: 'mono', text: c.nexa_target })));
+      const qs = c.open_questions || [];
+      const cols = el('div', { class: 'sub-stats small' },
+        el('span', { title: dropped.length ? dropped.join(', ') : null }, 'حساس حذف‌شده: ', el('b', { class: 'num', text: fmtNum(dropped.length) })),
+        el('span', null, 'خانه پوشانده: ', el('b', { class: 'num', text: fmtNum(c.redacted_cells || 0) })));
+      const unm = c.unmapped_columns || [];
+      if (unm.length) explain.append(el('div', { class: 'muted' }, 'ستون‌های نگاشت‌نشده: ', tagList(unm, 'is-warn')));
+      if (qs.length) explain.append(el('div', { class: 'muted' }, 'پرسش‌های باز:', el('ul', { class: 'check-list small' }, qs.map((q) => el('li', { class: 'ltr-text', text: stringify(q) })))));
+      tbody.append(el('tr', { 'data-table': c.table, 'data-status': c.status, 'data-class': c.class || '' },
+        el('td', null, el('bdi', { dir: 'ltr', class: 'mono', text: c.table })),
+        el('td', null, labelWithCode(classLabel(c.class, c.class_fa), c.class || null)),
+        el('td', null, el('span', { class: 'badge cov-' + c.status, 'data-testid': 'coverage-status-badge', text: covStatusLabel(c.status) })),
+        el('td', { class: 'num', text: fmtNum(c.rows) }),
+        el('td', null, counts),
+        el('td', null, cols)));
+      tbody.append(el('tr', { class: 'cov-detail' }, el('td', { colspan: 6 }, explain)));
+    }
+    if (!shown.length) tbody.append(el('tr', null, el('td', { colspan: 6, class: 'empty', text: 'جدولی با این فیلتر وجود ندارد.' })));
+    $('coverage-shown').textContent = 'نمایش ' + fmtNum(shown.length) + ' از ' + fmtNum(rows.length) + ' جدول';
   }
 
   // ------------------------------------------------------------------ review
@@ -1297,8 +1608,8 @@
         if (it.kind) reviewKinds.add(it.kind);
         tbody.append(el('tr', { 'data-severity': it.severity, 'data-kind': it.kind },
           el('td', null, el('span', { class: 'badge st-' + it.severity, text: SEVERITY_FA[it.severity] || it.severity })),
-          el('td', { class: 'ltr', text: it.kind || '' }),
-          el('td', null, el('span', { class: 'error-code', text: it.code || '' })),
+          el('td', null, labelWithCode(own(L.review_kinds, it.kind) || humanise(it.kind || ''), it.kind)),
+          el('td', null, labelWithCode(own(L.review_codes, it.code) || own(L.blocker_codes, it.code) || humanise(it.code || ''), it.code)),
           el('td', { text: it.message || '' }),
           el('td', { text: it.entity ? entityLabel(it.entity) : '' }),
           el('td', { class: 'ltr small', text: stringify(it.source_ref) }),
@@ -1435,6 +1746,71 @@
       ['موارد نیازمند بررسی', s.review_count !== undefined ? fmtNum(s.review_count) : undefined],
       ['رمزنگاری بسته', j.has_key ? 'کلید تصادفی جداگانه' : 'رمز عبور اپراتور'],
     ]);
+    if (ok) loadPackagePreview(j.id);
+    else $('package-preview').hidden = true;
+  }
+
+  function fileSection(path) {
+    const m = /^records\/(?:([^/]+)\/)?([^/]+)\.jsonl$/.exec(path);
+    if (m) return m[1] ? entityLabel(m[1]) + ': ' + m[2] : entityLabel(m[2]);
+    if (path.startsWith('reports/')) return 'گزارش';
+    if (path === 'manifest.json') return 'مشخصات بسته (Manifest)';
+    return '—';
+  }
+
+  async function loadPackagePreview(jobId) {
+    if (S.pkgPreviewFor === jobId && !$('package-preview').hidden) return;
+    try {
+      const p = await api('GET', jobPath(jobId, '/package-preview'));
+      if (!S.job || S.job.id !== jobId || S.view !== 'download') return;
+      S.pkgPreviewFor = jobId;
+      renderPackagePreview(p);
+    } catch (e) {
+      $('package-preview').hidden = true;
+      if (e.status !== 404 && e.status !== 401) showError(e);
+    }
+  }
+
+  function renderPackagePreview(p) {
+    const m = p.manifest || {};
+    const comp = m.compatibility || {};
+    const conv = m.converter || {};
+    $('contract-version').textContent = p.package_schema_version || '—';
+    const files = p.files || [];
+    const totalRecords = files.reduce((a, f) => a + (Number(f.records) || 0), 0);
+    kvGrid($('package-preview-meta'), [
+      ['قرارداد', el('bdi', { dir: 'ltr', class: 'mono', text: (p.package_schema || m.package_schema || '—') + ' @ ' + (p.package_schema_version || '—') })],
+      ['آمادگی', own(L.readiness, p.readiness) || p.readiness || '—', p.readiness === 'ready' ? 'ok-text' : 'bad-text'],
+      ['نسخه نگاشت', m.mapping_version || undefined, 'mono'],
+      ['مبدل', conv.name ? conv.name + ' ' + (conv.version || '') : undefined, 'mono'],
+      ['حداقل نسخه Importer', comp.min_importer_version || undefined, 'mono'],
+      ['تأییدشده توسط Importer', p.verified_by_importer ? 'بله' : 'خیر — Importer هنوز ساخته نشده', p.verified_by_importer ? '' : 'bad-text'],
+      ['زمان ساخت', m.created_at || undefined, 'mono'],
+      ['واحد اعلام‌شده', m.money ? (UNIT_FA[m.money.declared_unit] || 'تعیین‌نشده') : undefined],
+      ['تعداد فایل‌ها', fmtNum(files.length)],
+      ['مجموع رکوردها', fmtNum(totalRecords)],
+      ['حجم بسته رمزنگاری‌شده', fmtBytes(p.package_bytes)],
+    ]);
+    const bl = $('package-preview-blockers');
+    clear(bl);
+    const blockers = p.blockers || [];
+    if (blockers.length) {
+      bl.append(el('h3', { class: 'small', text: 'موارد مسدودکننده بسته' }),
+        el('ul', { class: 'issue-list' }, blockers.map((b) => el('li', { 'data-code': b.code },
+          el('span', { class: 'msg', text: own(L.blocker_codes, b.code) || b.message || humanise(b.code || '') }),
+          el('span', { class: 'error-code', text: b.code || '' })))));
+    }
+    const tbody = $('package-files-tbody');
+    clear(tbody);
+    for (const f of files) {
+      tbody.append(el('tr', { 'data-path': f.path },
+        el('td', { class: 'ltr mono', text: f.path }),
+        el('td', { text: fileSection(String(f.path)) }),
+        el('td', { class: 'num', text: f.records === null || f.records === undefined ? '—' : fmtNum(f.records) }),
+        el('td', { class: 'num', text: fmtBytes(f.bytes) }),
+        el('td', { class: 'ltr mono small', title: f.sha256 || null, text: f.sha256 ? String(f.sha256).slice(0, 16) + '…' : '—' })));
+    }
+    $('package-preview').hidden = false;
   }
 
   async function deleteJob() {
@@ -1735,6 +2111,9 @@
     $('review-severity').addEventListener('change', () => loadReview(0));
     $('review-limit').addEventListener('change', () => loadReview(0));
     $('preview-load').addEventListener('click', loadPreview);
+    $('coverage-class').addEventListener('change', renderCoverageTable);
+    $('coverage-status').addEventListener('change', renderCoverageTable);
+    $('coverage-filters').addEventListener('submit', (ev) => ev.preventDefault());
     $('preview-entity').addEventListener('change', loadPreview);
 
     // download / history / settings
@@ -1791,6 +2170,16 @@
     }
     $('splash').hidden = true;
     $('app').hidden = false;
+
+    // Persian labels (shared with the downloadable report). Defaults above cover a failure.
+    try {
+      const lb = await api('GET', '/api/labels');
+      if (lb && typeof lb === 'object') {
+        for (const k of Object.keys(L)) if (lb[k] && typeof lb[k] === 'object') L[k] = Object.assign({}, L[k], lb[k]);
+      }
+    } catch (_) {
+      /* keep defaults */
+    }
 
     // settings (for client-side size check) — non-blocking
     api('GET', '/api/settings').then((s) => { S.settings = s; }).catch(() => {});

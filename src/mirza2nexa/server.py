@@ -29,7 +29,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from . import __version__
+from . import __version__, report_fa
 from .archive import inspect_archive, verify_password
 from .errors import MigrationError
 from .jobs import Job, JobManager, clear_history, read_history
@@ -52,6 +52,9 @@ SECURITY_HEADERS = {
     "Cross-Origin-Resource-Policy": "same-origin",
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
 }
+
+# The downloadable HTML report has no scripts at all; only its own inline CSS may apply.
+REPORT_HTML_CSP = "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 
 
 def _err(status: int, code: str, message: str, detail: str | None = None) -> JSONResponse:
@@ -395,6 +398,81 @@ def create_app(manager: JobManager, *, port: int, launch_token: str) -> FastAPI:
         if p is None:
             return _err(404, "report.not_ready", "گزارش هنوز آماده نیست.")
         return FileResponse(p, media_type="application/json", filename=f"mirza2nexa-report-{job.id}.json")
+
+    # ---- Phase 2: labels, package preview, Persian reports ----------------------------
+    @app.get("/api/labels")
+    async def labels() -> dict[str, Any]:
+        return report_fa.labels_payload()
+
+    def _load_report(job: Job) -> dict[str, Any] | None:
+        p = _report_file(job, "report.json")
+        return json.loads(p.read_text(encoding="utf-8")) if p is not None else None
+
+    def _stage_json(job: Job, name: str) -> Any:
+        p = job.workspace / "stage" / name
+        if not p.is_file() or p.is_symlink() or p.stat().st_size > 64 * 1024 * 1024:
+            return None
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+
+    @app.get("/api/jobs/{job_id}/package-preview")
+    async def package_preview(job_id: str) -> Response:
+        """What the encrypted package contains, read from the plaintext staging copy of its
+        ``manifest.json``/``checksums.json`` (never by decrypting the package)."""
+        job = job_or_404(job_id)
+        if isinstance(job, JSONResponse):
+            return job
+        if job.status != "completed" or job.package_path is None or not job.package_path.exists():
+            return _err(404, "package.not_ready", "بسته خروجی هنوز آماده نیست.")
+        manifest = _stage_json(job, "manifest.json")
+        checksums = _stage_json(job, "checksums.json")
+        if not isinstance(manifest, dict) or not isinstance(checksums, dict):
+            return _err(404, "package.not_ready", "فهرست محتوای بسته در دسترس نیست.")
+        files = checksums.get("files") if isinstance(checksums.get("files"), dict) else {}
+        public_manifest = {k: v for k, v in manifest.items() if k != "files"}
+        report = _load_report(job) or {}
+        return JSONResponse({
+            "package_schema_version": manifest.get("package_schema_version"),
+            "package_schema": manifest.get("package_schema"),
+            "manifest": public_manifest,
+            "files": [{"path": path, "records": (e or {}).get("records"), "bytes": (e or {}).get("size"),
+                       "sha256": (e or {}).get("sha256")} for path, e in sorted(files.items())],
+            "package_file": job.package_path.name,
+            "package_bytes": job.package_path.stat().st_size,
+            "readiness": manifest.get("readiness"),
+            "blockers": report.get("blockers") or [{"code": c} for c in manifest.get("blockers") or []],
+            "importer_built": False,
+            "verified_by_importer": bool((manifest.get("compatibility") or {}).get("verified_by_importer")),
+        })
+
+    @app.get("/api/jobs/{job_id}/report.html")
+    async def report_html(job_id: str) -> Response:
+        job = job_or_404(job_id)
+        if isinstance(job, JSONResponse):
+            return job
+        rep = _load_report(job)
+        if rep is None:
+            return _err(404, "report.not_ready", "گزارش هنوز آماده نیست.")
+        manifest = _stage_json(job, "manifest.json")
+        body = report_fa.render_report_html(rep, manifest=manifest if isinstance(manifest, dict) else None)
+        return Response(body, media_type="text/html; charset=utf-8", headers={
+            "Content-Disposition": f'attachment; filename="mirza2nexa-report-{job.id}.html"',
+            "Content-Security-Policy": REPORT_HTML_CSP,
+        })
+
+    @app.get("/api/jobs/{job_id}/coverage.csv")
+    async def coverage_csv(job_id: str) -> Response:
+        job = job_or_404(job_id)
+        if isinstance(job, JSONResponse):
+            return job
+        rep = _load_report(job)
+        if rep is None:
+            return _err(404, "report.not_ready", "گزارش هنوز آماده نیست.")
+        return Response(report_fa.render_coverage_csv(rep), media_type="text/csv; charset=utf-8", headers={
+            "Content-Disposition": f'attachment; filename="mirza2nexa-coverage-{job.id}.csv"',
+        })
 
     return app
 

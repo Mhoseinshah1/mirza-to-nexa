@@ -318,3 +318,73 @@ def test_foreign_host_and_origin_rejected(server):
                    headers={"Origin": f"http://localhost.evil:{server.port}"})
     assert r.status_code == 403
     assert "set-cookie" not in r.headers
+
+
+def test_coverage_page_package_preview_and_persian_reports(ui, server, tmp_path):
+    """Phase 2 pages: coverage table with an uncatalogued (hostile-named) table, Persian HTML
+    report and coverage CSV downloads, and the full package preview with the importer warning."""
+    import io
+    import zipfile
+
+    from mirza2nexa.nxpkg.manifest import PACKAGE_SCHEMA_VERSION
+    from mirza2nexa.synth import SynthSpec, write_dump
+
+    evil = "x<img src=x onerror=alert(1)>"
+    buf = io.StringIO()
+    write_dump(buf, SynthSpec(users=120, seed=5))
+    buf.write(f"CREATE TABLE `{evil}` (`id` int NOT NULL, PRIMARY KEY (`id`));\n"
+              f"INSERT INTO `{evil}` VALUES (1),(2);\n")
+    zp = tmp_path / "coverage.zip"
+    with zipfile.ZipFile(zp, "w") as zf:
+        zf.writestr("backup.sql", buf.getvalue())
+
+    page, probs = ui
+    open_app(page, server)
+    upload(page, zp)
+    start(page, password=None, money_unit="toman")
+    assert wait_terminal(page) == "completed"
+
+    # coverage page
+    page.click("[data-testid=nav-coverage]")
+    page.wait_for_selector("[data-testid=coverage-table] tbody tr[data-table]")
+    assert page.is_visible("[data-testid=coverage-summary]")
+    assert page.text_content("[data-testid=cov-total] .stat-value")
+    row = page.locator("[data-testid=coverage-table] tbody tr[data-table]").filter(has_text=evil)
+    assert row.count() == 1
+    assert row.get_attribute("data-status") == "blocked"
+    assert "مسدود" in (row.locator("[data-testid=coverage-status-badge]").text_content() or "")
+    assert page.locator("[data-testid=uncovered-list] li[data-table]").filter(has_text=evil).count() == 1
+    assert page.locator("img[src=x]").count() == 0  # rendered as text, never as markup
+    executed = page.locator("[data-testid=coverage-table] tbody tr[data-status=executed]").first
+    assert "اجرا شد" in (executed.text_content() or "")
+    page.select_option("[data-testid=coverage-status]", "blocked")
+    page.wait_for_function(
+        "() => [...document.querySelectorAll('[data-testid=coverage-table] tbody tr[data-table]')]"
+        ".every(r => r.dataset.status === 'blocked')")
+    name, data = read_download(page, "download-coverage-csv")
+    assert name.endswith(".csv") and data.startswith(b"\xef\xbb\xbf")
+    assert evil in data.decode("utf-8")
+
+    # report page: Persian sections and the HTML report download
+    page.click("[data-testid=nav-report]")
+    page.wait_for_selector("[data-testid=readiness][data-readiness=blocked]")
+    assert page.is_visible("[data-testid=section-operational]")
+    assert page.is_visible("[data-testid=section-archive]")
+    assert page.is_visible("[data-testid=section-review]")
+    assert page.locator("[data-testid=blocker-groups] [data-category=schema] [data-code=UNCLASSIFIED_TABLE]").count() == 1
+    recon = page.text_content("[data-testid=reconciliation]") or ""
+    assert "موجودی افتتاحیه" in recon and "opening_credits" in recon  # Persian label + small code
+    name, data = read_download(page, "download-report-html")
+    assert name.endswith(".html")
+    html_text = data.decode("utf-8")
+    assert "<script" not in html_text.lower() and "<img" not in html_text.lower()
+    assert "x&lt;img" in html_text
+
+    # download page: full package preview
+    page.click("[data-testid=nav-download]")
+    page.wait_for_selector("[data-testid=package-preview]:not([hidden]) [data-testid=package-files] tbody tr")
+    assert page.text_content("[data-testid=contract-version]") == PACKAGE_SCHEMA_VERSION
+    warn = page.locator("[data-testid=importer-warning]")
+    assert warn.is_visible() and "Importer" in (warn.text_content() or "")
+    assert page.locator("[data-testid=package-files] tbody tr[data-path='records/customers.jsonl']").count() == 1
+    probs.assert_clean()

@@ -343,3 +343,50 @@ td.ltr { text-align: left; }
 .dialog::backdrop { background: rgba(10, 14, 25, .55); }
 .table tbody tr.is-current { background: var(--primary-soft); }
 #status-body, #report-body, #review-body, #preview-body, #download-body { display: flex; flex-direction: column; gap: 1rem; }
+
+/* ---------- phase 2: coverage, labels, package preview ---------- */
+#coverage-body { display: flex; flex-direction: column; gap: 1rem; }
+.head-actions { margin-top: 0; }
+.lbl { display: inline-flex; flex-direction: column; gap: 0; line-height: 1.45; }
+.lbl .key-code { font-family: var(--mono); font-size: .7rem; color: var(--muted); direction: ltr; unicode-bidi: isolate; text-align: start; font-weight: 400; }
+.lbl .key-help { font-size: .74rem; color: var(--muted); font-weight: 400; }
+.ltr-text { unicode-bidi: plaintext; }
+.block { display: block; }
+.bool.is-yes { color: var(--ok); font-weight: 700; }
+.bool.is-no { color: var(--bad); font-weight: 700; }
+.ok-text { color: var(--ok); }
+.bad-text { color: var(--bad); }
+.recon-table { margin-bottom: .3rem; }
+.recon-table .recon-table { font-size: .85rem; background: var(--surface-2); }
+.recon-table th { position: static; white-space: normal; min-width: 160px; }
+.sub-stats { display: flex; flex-wrap: wrap; gap: .2rem .8rem; color: var(--muted); }
+.sub-stats b { color: var(--text); }
+.mini-list { list-style: none; margin: .5rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .25rem; }
+.mini-list li { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+.class-section h2 { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.blocker-group { margin-bottom: .8rem; }
+.blocker-group h3 { color: var(--bad); margin-bottom: .3rem; }
+.badge.cov-executed { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+.badge.cov-archived { background: var(--primary-soft); color: var(--primary); border-color: transparent; }
+.badge.cov-review { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.badge.cov-blocked { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
+.badge.cov-empty, .badge.cov-excluded { background: var(--surface-2); color: var(--muted); }
+.stat.is-bad .stat-value { color: var(--bad); }
+.uncovered-card { border-color: var(--bad); background: var(--bad-soft); }
+.uncovered-card h2 { color: var(--bad); }
+.uncovered-card.is-clear { border-color: var(--ok); background: var(--ok-soft); }
+.uncovered-card.is-clear h2 { color: var(--ok); }
+.uncovered-card .issue-list li { background: var(--surface); }
+.importer-warning {
+  background: var(--bad-soft); border: 2px solid var(--bad); color: var(--bad); border-radius: 10px;
+  padding: .7rem 1rem; display: flex; flex-direction: column; gap: .2rem; margin-bottom: .8rem;
+}
+.importer-warning span { color: var(--text); }
+.contract-version { font-size: 1.05rem; font-weight: 700; }
+.contract-version .mono { font-size: 1.15rem; color: var(--primary); background: var(--primary-soft); padding: .1rem .6rem; border-radius: 8px; }
+#coverage-table tbody tr[data-table] td { border-bottom: 0; padding-bottom: .2rem; }
+#coverage-table tr.cov-detail td { padding-top: 0; padding-bottom: .7rem; }
+#coverage-table tr.cov-detail:hover, #coverage-table tr.cov-detail:hover + tr { background: transparent; }
+#coverage-table .lbl { min-width: 9rem; }
+details.recon-section > summary { cursor: pointer; list-style-position: inside; }
+details.recon-section > summary h3 { display: inline-block; margin: 0 0 .3rem; }
