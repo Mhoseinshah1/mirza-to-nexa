@@ -9,10 +9,11 @@ the review queue or blocks it. It never makes up a value.
 
 ## Ground rules
 
-* **Source contract:** the converter uses NEXA's frozen legacy read set v1 (`source-port.ts:36-83`).
+* **Source contract:** the converter uses NEXA's frozen legacy read set v1 (`source-port.ts:36-83`), plus
+  the required `user.User_Status` from NEXA's user-status read set (`read-set.ts:383-399`).
   * Tables: `user`, `invoice`, `product`. Names are matched case-sensitively.
   * Required columns:
-    * `user`: `id`, `Balance`, `limit_usertest`
+    * `user`: `id`, `Balance`, `limit_usertest`, `User_Status`
     * `invoice`: `id_invoice`, `id_user`, `username`, `Status`, `is_test`, `code_panel`, `code_product`, `Volume`, `Service_time`, `time_unit`, `is_custom`, `price_product`
     * `product`: `id`, `code_product`
   * Any other table is *unclassified*. It is counted and reported, but never migrated.
@@ -55,21 +56,30 @@ the review queue or blocks it. It never makes up a value.
 
 ## Service decision order
 
-The order follows `decisions.ts:277-372` and `importer.md:380-391`:
+The order follows `decisions.ts:277-372` and `plan.ts:311-342`:
 
-1. `INVOICE_KEY_INVALID`
-2. `TEST_INVOICE_SKIPPED`
-3. `INVALID_SOURCE_ROW`
-4. `ORPHAN`
-5. `CUSTOMER_NOT_IMPORTED`
-6. `INVALID_USERNAME`
-7. `NO_PANEL`
-8. `UNSUPPORTED_SHAPE`
-9. `NAMED_PRODUCT` or `HIDDEN_SHAPE`
-10. Ownership:
-    * candidates that share one panel account but have different owners: all become `AMBIGUOUS_OWNERSHIP`;
-    * several invoices from the same owner: the first by key byte order stays a candidate, and the rest
-      become `AMBIGUOUS_OWNERSHIP` (OQ-LSR-03).
+1. `SOURCE_KEY_DUPLICATED` (a NULL key is caught as `INVOICE_KEY_INVALID`)
+2. `INVOICE_KEY_INVALID`
+3. `TEST_INVOICE_SKIPPED`
+4. `INVALID_SOURCE_ROW`
+5. `ORPHAN`
+6. `CUSTOMER_NOT_IMPORTED`
+7. `INVALID_USERNAME`
+8. `NO_PANEL`
+9. Shape and product:
+   * an `is_custom` value other than `0`/`1` → `UNSUPPORTED_SHAPE/IS_CUSTOM_INVALID`;
+   * a **named** product (not custom, and its code is in the `product` table) → `NAMED_PRODUCT`.
+     A named product is **never** shape-checked;
+   * otherwise the shape key decides between `HIDDEN_SHAPE` and `UNSUPPORTED_SHAPE`.
+10. Ownership: eligible candidates of **two or more different owners** on one panel account
+    (`code_panel`, lowercase username) all become `AMBIGUOUS_OWNERSHIP`.
+    * Several invoices of **one** owner stay eligible. NEXA's adoption (P6) reports the later ones as
+      conflicts.
+    * Limitation: NEXA groups by the *mapped panel id*. Two codes that map to one panel can only be
+      detected inside NEXA.
+
+Every live invoice is counted exactly once, as converted, review or skipped. If not, the package gets
+`SERVICE_ACCOUNTING_MISMATCH`.
 
 Panel-map checks (`PANEL_UNMAPPED`, `TEST_PANEL_SKIPPED`, `PROVIDER_MISSING`, …) and the live panel
 check happen inside NEXA during adoption. The converter never calls a panel.
@@ -83,10 +93,24 @@ users               = credits# + debts# + zero# + held_for_review# + invalid_ide
 
 Both equations must hold.
 
-After the records are written, the converter re-reads the files and recounts them independently
-(`independent_recount`). The recount must match too, and no customer may have two money records.
+Two further checks run after the records are written:
 
-If any check fails, the package gets `FINANCIAL_RECONCILIATION_MISMATCH` and readiness `blocked`.
+* **Output recount** (`independent_recount`): the written files are re-read. Their totals must match
+  the converter's totals, and no customer may have two money records.
+* **Source recount** (`source_recount`): the readable balances are summed again straight from the staged
+  source, using SQLite `GLOB` matching instead of the converter's regex. The result must equal
+  `written credits − written debts + held_for_review + invalid_identity`.
+
+If any check fails, the package gets `FINANCIAL_RECONCILIATION_MISMATCH` or `SOURCE_RECOUNT_MISMATCH`,
+and its readiness becomes `blocked`.
+
+**Other blockers**
+* a duplicate Telegram id (`DUPLICATE_SOURCE_ID`);
+* a duplicate or NULL primary key on an invoice or product (`SOURCE_KEY_DUPLICATED`).
+
+**Refused outright**
+* two SQL files in one ZIP that define the same table (`schema.table_defined_twice`);
+* rows for a core table that appear before its `CREATE TABLE`.
 
 ## Re-import and backup-to-backup comparison
 

@@ -44,7 +44,7 @@ MESSAGES: dict[str, str] = {
     "STATUS_UNKNOWN": "وضعیت کاربر نه Active است نه block؛ مشتری وارد نمی‌شود تا بررسی شود.",
     "NEGATIVE_BALANCE": "موجودی منفی به‌عنوان بدهی قدیمی ثبت شد (بدون کسر یا تسویه خودکار).",
     "CODE_DUPLICATED": "کد محصول در چند ردیف تکرار شده؛ هیچ مشخصه‌ای از آن برداشت نشد.",
-    "SOURCE_KEY_DUPLICATED": "شناسه فاکتور تکراری است؛ آرشیو فاکتورها تا رفع آن مسدود است.",
+    "SOURCE_KEY_DUPLICATED": "کلید اصلی ردیف (شناسه فاکتور/محصول) تکراری یا خالی است؛ ردیف وارد نمی‌شود.",
     "INVOICE_WITHOUT_CUSTOMER": "فاکتور مشتری مشخصی در جدول کاربران ندارد (یتیم).",
     "ORPHAN": "سرویس فعال بدون مالک مشخص؛ وارد صف بررسی شد و هرگز خودکار واگذار نمی‌شود.",
     "CUSTOMER_NOT_IMPORTED": "مالک سرویس خودش وارد نشده (در صف بررسی است)؛ سرویس هم منتظر می‌ماند.",
@@ -64,9 +64,13 @@ BLOCKER_MESSAGES: dict[str, str] = {
     "FINANCIAL_RECONCILIATION_MISMATCH": "جمع مبالغ خروجی با جمع مبالغ بکاپ برابر نیست؛ بسته مسدود شد.",
     "SOURCE_SCHEMA_MISSING_COLUMN": "برخی ستون‌های الزامی قرارداد NEXA در بکاپ وجود ندارد؛ بخش‌های وابسته مسدود شد.",
     "SOURCE_SCHEMA_MISSING_TABLE": "برخی جدول‌های الزامی در بکاپ وجود ندارد؛ بخش‌های وابسته مسدود شد.",
-    "SOURCE_KEY_DUPLICATED": "شناسه تکراری فاکتور در بکاپ؛ آرشیو فاکتورها مسدود است.",
+    "SOURCE_KEY_DUPLICATED": "کلید اصلی تکراری در بکاپ (فاکتور یا محصول)؛ بسته مسدود است.",
     "UNREPRESENTABLE_CELLS": "برخی مقادیر بکاپ قابل خواندن متنی نیستند.",
     "BALANCE_CHANGED_SINCE_PREVIOUS": "موجودی برخی مشتریان نسبت به بکاپ قبلی تغییر کرده است.",
+    "DUPLICATE_SOURCE_ID": "شناسه تلگرام تکراری در جدول کاربران؛ تا بررسی، بسته مسدود است.",
+    "SERVICE_ACCOUNTING_MISMATCH": "تعداد سرویس‌های خروجی با تعداد فاکتورهای فعال بکاپ برابر نیست.",
+    "SOURCE_RECOUNT_MISMATCH": "بازشماری مستقل مبالغ از بکاپ با مبالغ خروجی برابر نیست.",
+    "TABLE_DEFINED_TWICE": "یک جدول در چند فایل SQL تعریف شده است؛ ادغام خودکار انجام نمی‌شود.",
 }
 
 WARNING_MESSAGES: dict[str, str] = {
@@ -225,7 +229,6 @@ class Converter:
         tiers: dict[str, int] = {}
         agents = 0
         seen_dup: set[str] = set()
-        has_status = "User_Status" in self.tables["user"].stored_columns
 
         for rowno, r in self._rows("user", "id"):
             self._tick()
@@ -249,6 +252,7 @@ class Converter:
                 if balance is not None:
                     in_review.add(balance)
                 if tg not in seen_dup:  # one review row stands for all of them (importer.md:327-332)
+                    self.out.block("DUPLICATE_SOURCE_ID")  # CLAUDE.md: duplicate Telegram id is blocking
                     seen_dup.add(tg)
                     self._review(kind="customer", code="DUPLICATE_SOURCE_ID", entity="customers", table="user",
                                  pk=tg, data={"rows": c.execute(
@@ -267,7 +271,7 @@ class Converter:
                 self._review(kind="wallet", code="BALANCE_OUT_OF_RANGE", entity="customers", table="user", pk=tg,
                              data={"balance_raw": r["Balance"]})
                 continue
-            status = rules.user_status(r.get("User_Status")) if has_status else "UNKNOWN"
+            status = rules.user_status(r["User_Status"])
             if status == "UNKNOWN":
                 c.execute("INSERT INTO cust VALUES (?, 'STATUS_UNKNOWN')", (tg,))
                 in_review.add(balance)
@@ -368,7 +372,7 @@ class Converter:
             if code is not None:
                 c.execute("INSERT INTO pcode VALUES (?, 1) ON CONFLICT(code) DO UPDATE SET n = n + 1", (code,))
         live_counts: dict[str, int] = {}
-        if "invoice" not in self.profile.entity_blocked:
+        if "invoices" not in self.profile.entity_blocked:
             ph = ",".join("?" for _ in rules.LIVE_STATUSES)
             for code, n in c.execute(
                 f"SELECT c_code_product, COUNT(*) FROM src_invoice WHERE c_Status IN ({ph}) GROUP BY c_code_product",  # noqa: S608
@@ -380,10 +384,18 @@ class Converter:
         products = self.open("records/products.jsonl")
         categories: dict[str, int] = {}
         cat_col = "Category" if "Category" in cols else "category" if "category" in cols else None
+        dup_ids = {r[0] for r in c.execute(
+            "SELECT c_id FROM src_product GROUP BY c_id HAVING COUNT(*) > 1 OR c_id IS NULL")}
+        if dup_ids:
+            self.out.block("SOURCE_KEY_DUPLICATED", len(dup_ids))
         for _rowno, r in self._rows("product", "id"):
             self._tick()
             self._count("products", "source")
             pid = r["id"]
+            if pid in dup_ids:
+                self._review(kind="product", code="SOURCE_KEY_DUPLICATED", entity="products", table="product",
+                             pk=pid)
+                continue
             code = rules.blank_to_none(r["code_product"])
             if code is not None and c.execute("SELECT n FROM pcode WHERE code = ?", (code,)).fetchone()[0] > 1:
                 self._review(kind="product", code="CODE_DUPLICATED", entity="products", table="product", pk=pid,
@@ -438,10 +450,11 @@ class Converter:
     def _invoices(self) -> None:
         c = self.conn
         dup_keys = {r[0] for r in c.execute(
-            "SELECT c_id_invoice FROM src_invoice GROUP BY c_id_invoice HAVING COUNT(*) > 1")}
+            "SELECT c_id_invoice FROM src_invoice WHERE c_id_invoice IS NOT NULL "
+            "GROUP BY c_id_invoice HAVING COUNT(*) > 1")}
         if dup_keys:
             self.out.block("SOURCE_KEY_DUPLICATED", len(dup_keys))
-        has_products = "product" not in self.profile.entity_blocked
+        has_products = "products" not in self.profile.entity_blocked
         invoices = self.open("records/invoices.jsonl")
         price_total = Totals()
         classes: dict[str, int] = {}
@@ -482,7 +495,7 @@ class Converter:
                 pref = "NAMED"
             else:
                 pref = "NOT_IN_PRODUCT_TABLE"
-            price, price_note = rules.parse_price(r["price_product"])
+            price, price_note = rules.parse_invoice_price(r["price_product"])
             if price is not None:
                 price_total.add(price)
             sold_at, sold_note = rules.parse_time_sell(r.get("time_sell"))
@@ -536,12 +549,17 @@ class Converter:
     # ---- services (adoption candidates) ------------------------------------------------
     def _services(self) -> None:
         c = self.conn
-        c.execute("CREATE TEMP TABLE svc (k TEXT PRIMARY KEY, owner TEXT, panel TEXT, uname TEXT, "
-                  "decision TEXT, rec TEXT) WITHOUT ROWID")
-        has_products = "product" not in self.profile.entity_blocked
+        # rowno, not the invoice key, is the primary key: a NULL or duplicated key must reach
+        # the review queue, never be dropped by a uniqueness constraint.
+        c.execute("CREATE TEMP TABLE svc (rowno INTEGER PRIMARY KEY, k TEXT, owner TEXT, panel TEXT, uname TEXT, "
+                  "decision TEXT, rec TEXT)")
+        dup_keys = {r[0] for r in c.execute(
+            "SELECT c_id_invoice FROM src_invoice WHERE c_id_invoice IS NOT NULL "
+            "GROUP BY c_id_invoice HAVING COUNT(*) > 1")}
+        has_products = "products" not in self.profile.entity_blocked
         ph = ",".join("?" for _ in rules.LIVE_STATUSES)
         cur = c.execute(
-            f"SELECT {', '.join(_cols(self.tables['invoice']))} FROM src_invoice "  # noqa: S608
+            f"SELECT rowno, {', '.join(_cols(self.tables['invoice']))} FROM src_invoice "  # noqa: S608
             f"WHERE c_Status IN ({ph}) ORDER BY c_id_invoice, rowno", tuple(sorted(rules.LIVE_STATUSES)))
         names = list(self.tables["invoice"].stored_columns)
         import json as _json
@@ -550,12 +568,14 @@ class Converter:
         for row in iter(lambda: cur.fetchmany(1000), []):
             for vals in row:
                 self._tick()
-                r = dict(zip(names, vals, strict=True))
+                rowno, r = vals[0], dict(zip(names, vals[1:], strict=True))
                 key, owner = r["id_invoice"], r["id_user"]
                 self._count("services", "source")
                 is_test = rules.flag01(r["is_test"])
                 decision: str
-                if not rules.invoice_key_valid(key):
+                if key in dup_keys:
+                    decision = "SOURCE_KEY_DUPLICATED"
+                elif not rules.invoice_key_valid(key):
                     decision = "INVOICE_KEY_INVALID"
                 elif is_test is True:
                     decision = "TEST_INVOICE_SKIPPED"
@@ -576,13 +596,20 @@ class Converter:
                         decision = ""
                 shape_key, shape_reason, shape = rules.legacy_shape(
                     r["code_panel"], r["Volume"], r["Service_time"], r["time_unit"], r["is_custom"])
-                if decision == "" and shape_key is None:
-                    decision = "UNSUPPORTED_SHAPE"
                 code_product = rules.blank_to_none(r["code_product"])
                 named = (has_products and code_product is not None and r["is_custom"] == "0"
                          and c.execute("SELECT 1 FROM pcode WHERE code = ?", (code_product,)).fetchone() is not None)
+                # decisions.ts:327-364 — the is_custom flag first; a NAMED product (non-custom,
+                # code in the product table) is never shape-checked; only the hidden-shape path is.
                 if decision == "":
-                    decision = "NAMED_PRODUCT" if named else "HIDDEN_SHAPE"
+                    if r["is_custom"] not in ("0", "1"):
+                        decision, shape_reason = "UNSUPPORTED_SHAPE", "IS_CUSTOM_INVALID"
+                    elif named:
+                        decision = "NAMED_PRODUCT"
+                    elif shape_key is None:
+                        decision = "UNSUPPORTED_SHAPE"
+                    else:
+                        decision = "HIDDEN_SHAPE"
                 rec = {
                     "record_type": "legacy_service_candidate",
                     "idempotency_key": f"legacy:service:{key}",
@@ -605,32 +632,33 @@ class Converter:
                         key, owner, r["username"], r["Status"], r["is_test"], r["code_panel"], r["code_product"],
                         r["Volume"], r["Service_time"], r["time_unit"], r["is_custom"]])),
                 }
-                pending.append((key, owner, rules.blank_to_none(r["code_panel"]),
+                pending.append((rowno, key, owner, rules.blank_to_none(r["code_panel"]),
                                 rules.panel_username(r["username"]), decision,
                                 _json.dumps(rec, ensure_ascii=False, sort_keys=True)))
             if len(pending) >= 1000:
-                c.executemany("INSERT OR IGNORE INTO svc VALUES (?,?,?,?,?,?)", pending)
+                c.executemany("INSERT INTO svc VALUES (?,?,?,?,?,?,?)", pending)
                 pending.clear()
         if pending:
-            c.executemany("INSERT OR IGNORE INTO svc VALUES (?,?,?,?,?,?)", pending)
+            c.executemany("INSERT INTO svc VALUES (?,?,?,?,?,?,?)", pending)
 
-        # Ownership (importer.md:380-391; OQ-LSR-03): among eligible candidates sharing one
-        # panel account, different owners → all ambiguous; one owner with several invoices →
-        # the first in key byte order is the candidate, the rest are ambiguous.
+        # Ownership (plan.ts:311-342 withOwnershipRule): eligible candidates of two or more
+        # DIFFERENT owners naming one panel account are all ambiguous. Several invoices of ONE
+        # owner stay eligible; NEXA's adoption (P6) reports the later ones as conflicts.
+        # Limitation: grouped by code_panel here; NEXA groups by the mapped panel id.
         eligible = ("NAMED_PRODUCT", "HIDDEN_SHAPE")
         c.execute("""CREATE TEMP TABLE ambiguous AS
-            SELECT s.k FROM svc s JOIN (
-                SELECT panel, uname, COUNT(DISTINCT owner) AS owners, MIN(k) AS first_k
-                FROM svc WHERE decision IN (?, ?) GROUP BY panel, uname HAVING COUNT(*) > 1
+            SELECT s.rowno FROM svc s JOIN (
+                SELECT panel, uname, COUNT(DISTINCT owner) AS owners
+                FROM svc WHERE decision IN (?, ?) GROUP BY panel, uname HAVING COUNT(DISTINCT owner) > 1
             ) g ON s.panel = g.panel AND s.uname = g.uname
-            WHERE s.decision IN (?, ?) AND (g.owners > 1 OR s.k <> g.first_k)""", eligible + eligible)
-        c.execute("UPDATE svc SET decision = 'AMBIGUOUS_OWNERSHIP' WHERE k IN (SELECT k FROM ambiguous)")
+            WHERE s.decision IN (?, ?)""", eligible + eligible)
+        c.execute("UPDATE svc SET decision = 'AMBIGUOUS_OWNERSHIP' WHERE rowno IN (SELECT rowno FROM ambiguous)")
 
         services = self.open("records/services.jsonl")
         decisions: dict[str, int] = {}
         review_codes = {"ORPHAN", "CUSTOMER_NOT_IMPORTED", "INVALID_USERNAME", "NO_PANEL", "UNSUPPORTED_SHAPE",
-                        "AMBIGUOUS_OWNERSHIP", "INVALID_SOURCE_ROW", "INVOICE_KEY_INVALID"}
-        for k, decision, rec_json in c.execute("SELECT k, decision, rec FROM svc ORDER BY k"):
+                        "AMBIGUOUS_OWNERSHIP", "INVALID_SOURCE_ROW", "INVOICE_KEY_INVALID", "SOURCE_KEY_DUPLICATED"}
+        for k, decision, rec_json in c.execute("SELECT k, decision, rec FROM svc ORDER BY k, rowno"):
             self._tick()
             rec = _json.loads(rec_json)
             rec["decision"] = decision
@@ -640,15 +668,21 @@ class Converter:
                 continue
             if decision in review_codes:
                 self._review(kind="service", code=decision, entity="services", table="invoice", pk=k,
-                             severity="blocker" if decision in {"ORPHAN", "AMBIGUOUS_OWNERSHIP"} else "warning",
+                             severity="blocker" if decision in {"ORPHAN", "AMBIGUOUS_OWNERSHIP",
+                                                                 "SOURCE_KEY_DUPLICATED"} else "warning",
                              data={"code_panel": rec["code_panel"], "status_raw": rec["status_raw"],
                                    "shape_reason": rec["shape_reason"]})
                 continue
             rec["adoption_state"] = "PENDING_PANEL_MAPPING"
             services.write(rec)
             self._count("services", "converted")
+        sc = self.out.counts.get("services", {})
+        accounted = sc.get("converted", 0) + sc.get("review", 0) + sc.get("skipped", 0)
+        if accounted != sc.get("source", 0):
+            self.out.block("SERVICE_ACCOUNTING_MISMATCH")
         self.out.reconciliation["services"] = {"live_invoices": sum(decisions.values()),
-                                               "decisions": dict(sorted(decisions.items()))}
+                                               "decisions": dict(sorted(decisions.items())),
+                                               "accounted": accounted == sc.get("source", 0)}
         self.out.warn("SERVICES_NEED_PANEL_MAPPING")
 
     def _panels(self) -> None:

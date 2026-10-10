@@ -52,6 +52,10 @@ def cmd_convert(a: argparse.Namespace) -> int:
     ws = secure_workspace(Path(a.workdir) if a.workdir else None)
     prev_ws = None
     try:
+        pp_check = _secret(False, a.package_passphrase_env, "") if a.package_passphrase_env else None
+        if pp_check is not None and len(pp_check) < 12:
+            print("error: package passphrase must be at least 12 characters", file=sys.stderr)
+            return 1
         opts = ConvertOptions(
             password=_secret(a.ask_password, a.password_env, "ZIP password: "),
             money_unit=a.money_unit,

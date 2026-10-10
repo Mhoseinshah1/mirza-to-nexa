@@ -33,7 +33,9 @@ def js_trim(text: str) -> str:
 SOURCE_TABLES = ("user", "invoice", "product")
 PRIMARY_KEYS = {"user": "id", "invoice": "id_invoice", "product": "id"}
 REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
-    "user": ("id", "Balance", "limit_usertest"),
+    # User_Status is REQUIRED by NEXA's separate user-status read set (read-set.ts:383-399):
+    # a source without it is refused, never read as "everybody is active".
+    "user": ("id", "Balance", "limit_usertest", "User_Status"),
     "invoice": ("id_invoice", "id_user", "username", "Status", "is_test", "code_panel", "code_product",
                 "Volume", "Service_time", "time_unit", "is_custom", "price_product"),
     "product": ("id", "code_product"),
@@ -42,7 +44,7 @@ REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
 # read set (read-set.ts:395-399); invoice archive optional columns from
 # invoice-archive-read-set.ts:23-32; product review optional columns from products-read-set.ts:20-35.
 OPTIONAL_COLUMNS: dict[str, tuple[str, ...]] = {
-    "user": ("agent", "number", "username", "User_Status"),
+    "user": ("agent", "number", "username"),
     "invoice": ("Service_location", "time_sell", "name_product"),
     "product": ("agent", "name_product", "price_product", "Volume_constraint", "Location", "Service_time",
                 "Category", "category", "note", "data_limit_reset", "one_buy_status", "hide_panel"),
@@ -199,15 +201,24 @@ TIME_SELL_MAX = 4102444800
 
 
 def parse_time_sell(raw: str | None) -> tuple[int | None, str]:
-    if raw is None:
-        return None, "ABSENT"
+    """``parseLegacyTimeSell`` (invoice-archive-row.ts:160-170). The column is always present
+    (it is in the read set when the table has it), so NULL/blank is ``EMPTY``."""
+    if raw is None or js_trim(raw) == "":
+        return None, "EMPTY"
     t = js_trim(raw)
-    if not t or not t.isascii() or not t.isdigit():
+    if not re.fullmatch(r"[0-9]{1,15}", t):
         return None, "FORMAT_UNKNOWN"
     v = int(t)
     if not TIME_SELL_MIN <= v < TIME_SELL_MAX:
         return None, "OUT_OF_RANGE"
     return v, "OK"
+
+
+def parse_invoice_price(raw: str | None) -> tuple[int | None, str]:
+    """``parseLegacyInvoicePrice`` (invoice-archive-row.ts:137-142): NULL/blank is ``EMPTY``."""
+    if raw is None:
+        return None, "EMPTY"
+    return parse_price(raw)
 
 
 # packages/contracts/src/traffic-input.ts:36-60; catalog.ts:253-254

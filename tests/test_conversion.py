@@ -360,3 +360,108 @@ def test_report_contains_no_password_or_key(tmp_path):
     text = json.dumps(res.report)
     assert "TopSecret-Zip-99" not in text
     assert res.key_text not in text
+
+
+# ---- regressions from the adversarial review --------------------------------------------
+
+INV_DDL = ("CREATE TABLE `invoice` (`id_invoice` varchar(200), `id_user` varchar(200), `username` varchar(200), "
+           "`Status` varchar(200), `is_test` varchar(10), `code_panel` varchar(200), `code_product` varchar(200), "
+           "`Volume` varchar(200), `Service_time` varchar(200), `time_unit` varchar(50), `is_custom` varchar(10), "
+           "`price_product` varchar(200));\n")
+PROD_DDL = "CREATE TABLE `product` (`id` int, `code_product` varchar(200));\n"
+TWO_USERS = "INSERT INTO `user` VALUES ('7100000001',1,'100','Active'),('7100000002',1,'0','Active');\n"
+
+
+def _svc(res):
+    return {r["invoice_key"]: r["decision"] for r in records(res, "services")}
+
+
+def test_named_product_is_not_shape_checked(tmp_path):
+    sql = (USER_DDL + TWO_USERS + PROD_DDL + "INSERT INTO `product` VALUES (1,'p1');\n" + INV_DDL +
+           "INSERT INTO `invoice` VALUES ('1000000aaaa','7100000001','acct1','active','0','pan','p1','10','1','month','0','100'),"
+           "('1000000bbbb','7100000001','acct2','active','0','pan','','10','1','month','0','100');\n")
+    res = run(tmp_path, _zip_sql(tmp_path, sql))
+    assert _svc(res) == {"1000000aaaa": "NAMED_PRODUCT"}  # decisions.ts: named path skips the shape key
+    assert codes(res)["UNSUPPORTED_SHAPE"] == 1           # hidden-shape path still refuses 'month'
+
+
+def test_one_owner_several_invoices_stays_eligible(tmp_path):
+    sql = (USER_DDL + TWO_USERS + PROD_DDL + INV_DDL +
+           "INSERT INTO `invoice` VALUES ('1000000aaaa','7100000001','acct','active','0','pan','','10','30','','0','1'),"
+           "('1000000bbbb','7100000001','ACCT','active','0','pan','','10','30','','0','1');\n")
+    res = run(tmp_path, _zip_sql(tmp_path, sql))
+    assert _svc(res) == {"1000000aaaa": "HIDDEN_SHAPE", "1000000bbbb": "HIDDEN_SHAPE"}
+    assert "AMBIGUOUS_OWNERSHIP" not in codes(res)
+
+
+def test_missing_user_status_column_is_refused(tmp_path):
+    sql = ("CREATE TABLE `user` (`id` varchar(500), `limit_usertest` int, `Balance` varchar(64));\n"
+           "INSERT INTO `user` VALUES ('7100000001',1,'100');\n")
+    with pytest.raises(SchemaUnknown):
+        run(tmp_path, _zip_sql(tmp_path, sql))
+
+
+def test_null_and_duplicate_service_keys_reach_review(tmp_path):
+    sql = (USER_DDL + TWO_USERS + PROD_DDL + INV_DDL +
+           "INSERT INTO `invoice` VALUES (NULL,'7100000001','a','active','0','pan','','10','30','','0','1'),"
+           "('1000000aaaa','7100000001','b','active','0','pan','','10','30','','0','1'),"
+           "('1000000aaaa','7100000002','c','active','0','pan','','10','30','','0','1');\n")
+    res = run(tmp_path, _zip_sql(tmp_path, sql))
+    sc = res.report["counts"]["services"]
+    assert sc["source"] == 3 and sc["converted"] == 0 and sc["review"] == 3
+    assert res.report["reconciliation"]["services"]["accounted"] is True
+    assert "SOURCE_KEY_DUPLICATED" in blockers(res)
+
+
+def test_duplicate_product_ids_block(tmp_path):
+    sql = USER_DDL + TWO_USERS + PROD_DDL + "INSERT INTO `product` VALUES (1,'p1'),(1,'p2'),(2,'p3');\n"
+    res = run(tmp_path, _zip_sql(tmp_path, sql))
+    keys = [r["idempotency_key"] for r in records(res, "products")]
+    assert keys == ["legacy:product:2"]
+    assert "SOURCE_KEY_DUPLICATED" in blockers(res)
+
+
+def test_duplicate_telegram_id_blocks_package(tmp_path):
+    sql = USER_DDL + "INSERT INTO `user` VALUES ('7100000001',1,'5','Active'),('7100000001',1,'5','Active');\n"
+    res = run(tmp_path, _zip_sql(tmp_path, sql))
+    assert "DUPLICATE_SOURCE_ID" in blockers(res)
+
+
+def test_two_dump_files_defining_same_table_are_refused(tmp_path):
+    p = tmp_path / "multi.zip"
+    with zipfile.ZipFile(p, "w") as zf:
+        zf.writestr("a_old_users.sql", USER_DDL + TWO_USERS)
+        zf.writestr("b_full.sql", USER_DDL + TWO_USERS)
+    with pytest.raises(SchemaUnknown) as ei:
+        run(tmp_path, p)
+    assert ei.value.code == "schema.table_defined_twice"
+
+
+def test_insert_before_create_is_a_schema_error(tmp_path):
+    sql = "INSERT INTO `user` VALUES ('7100000001',1,'5','Active');\n" + USER_DDL
+    with pytest.raises(SchemaUnknown):
+        run(tmp_path, _zip_sql(tmp_path, sql))
+
+
+def test_failure_leaves_no_plaintext(tmp_path):
+    sql = USER_DDL + "INSERT INTO `user` VALUES ('7100000001',1,'5','Act"
+    with pytest.raises(SqlParseError):
+        run(tmp_path, _zip_sql(tmp_path, sql), delete_sql_after_parse=False)
+    assert [p for p in (tmp_path / "ws").rglob("*") if p.is_file()] == []
+
+
+def test_source_side_recount_is_independent(healthy):
+    res, exp, _ = healthy
+    sr = res.report["reconciliation"]["wallet"]["source_recount"]
+    assert sr["matches"] is True
+    # equals the generator's own truth, computed without the converter
+    assert int(sr["readable_sum_minor"]) == exp["positive_sum"] - exp["negative_sum"] + 500 + 0
+
+
+def test_invoice_parse_notes_match_nexa():
+    from mirza2nexa.mapping import rules
+
+    assert rules.parse_invoice_price(None) == (None, "EMPTY")
+    assert rules.parse_time_sell(None) == (None, "EMPTY")
+    assert rules.parse_time_sell("  ") == (None, "EMPTY")
+    assert rules.parse_time_sell("1" * 16) == (None, "FORMAT_UNKNOWN")

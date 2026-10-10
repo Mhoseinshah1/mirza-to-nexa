@@ -57,7 +57,8 @@ class Job:
     error: dict[str, Any] | None = None
     summary: dict[str, Any] | None = None
     package_path: Path | None = None
-    key_text: str | None = None  # generated key/passphrase, shown once to the operator; never persisted
+    key_text: str | None = None  # generated key; in memory for this session only, never persisted
+    deleted: bool = False
     cancel: CancelToken = field(default_factory=CancelToken)
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -147,20 +148,23 @@ class JobManager:
         with self._lock:
             return sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
 
+    STARTABLE = frozenset({"uploaded", "awaiting_password", "failed"})
+
     def start(self, job: Job, options: dict[str, Any]) -> None:
-        with job.lock:
-            if job.status not in {"uploaded", "awaiting_password", "failed"}:
-                raise MigrationError("این عملیات در وضعیت فعلی قابل شروع نیست.", code="job.bad_state")
-            job.status = "queued"
-            job.error = None
-            job.cancel = CancelToken()
-        options["_settings"] = self.settings
+        # Validate everything before changing state, so a refused start never strands the job.
         prev_id = options.pop("previous_job_id", None)
         if prev_id:
             prev = self.get(prev_id)
             if prev is None or prev.status != "completed" or prev.id == job.id:
                 raise MigrationError("عملیات قبلی برای مقایسه معتبر نیست.", code="job.bad_previous")
             options["previous_job"] = prev
+        options["_settings"] = self.settings
+        with job.lock:
+            if job.status not in self.STARTABLE or job.deleted:
+                raise MigrationError("این عملیات در وضعیت فعلی قابل شروع نیست.", code="job.bad_state")
+            job.status = "queued"
+            job.error = None
+            job.cancel = CancelToken()
         self._pool.submit(self._run, job, options)
 
     def _run(self, job: Job, options: dict[str, Any]) -> None:
@@ -194,7 +198,12 @@ class JobManager:
             options.clear()  # drop secrets
             with job.lock:
                 job.finished_at = time.time()
-            self._record_history(job)
+                deleted = job.deleted
+            if deleted:
+                # Deleted while running: the worker has stopped writing, so cleanup is final now.
+                cleanup_workspace(job.workspace)
+            else:
+                self._record_history(job)
 
     def cancel(self, job: Job) -> None:
         job.cancel.cancel()
@@ -206,7 +215,13 @@ class JobManager:
         job.cancel.cancel()
         with self._lock:
             self._jobs.pop(job.id, None)
-        cleanup_workspace(job.workspace)
+        with job.lock:
+            job.deleted = True
+            job.key_text = None
+            busy = job.status in {"queued", "running"}
+        if not busy:
+            cleanup_workspace(job.workspace)
+        # else: the worker's ``finally`` removes the workspace once it has stopped writing.
 
     def shutdown(self) -> None:
         for job in self.list():
@@ -236,6 +251,30 @@ class JobManager:
             "review_count": s.get("review_count"),
         }
         append_history(entry, self.settings.history_limit)
+
+
+def sweep_stale_workspaces(max_age_hours: float = 2.0) -> int:
+    """Delete workspaces left behind by a crashed/killed process (e.g. the console window was
+    closed). Only ``job-*`` folders under the default base whose contents have not changed for
+    ``max_age_hours`` are removed, so a second running instance is not disturbed."""
+    import tempfile
+
+    base = Path(tempfile.gettempdir()) / "mirza2nexa-work"
+    removed = 0
+    if not base.is_dir() or base.is_symlink():
+        return 0
+    cutoff = time.time() - max_age_hours * 3600
+    for d in base.glob("job-*"):
+        try:
+            if d.is_symlink() or not d.is_dir():
+                continue
+            newest = max([d.stat().st_mtime, *(p.stat().st_mtime for p in d.rglob("*"))])
+        except OSError:
+            continue
+        if newest < cutoff:
+            cleanup_workspace(d)
+            removed += 1
+    return removed
 
 
 _history_lock = threading.Lock()

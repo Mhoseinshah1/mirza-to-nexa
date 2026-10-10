@@ -214,3 +214,42 @@ def test_settings_validation(app_client):
     assert client.put("/api/settings", json={"max_ratio": 1}, headers=h).status_code == 400
     r = client.put("/api/settings", json={"max_entries": 10}, headers=h)
     assert r.status_code == 200 and r.json()["max_entries"] == 10
+
+
+def test_wrong_password_does_not_reopen_completed_job(app_client, tmp_path):
+    client, _ = app_client
+    h = login(client)
+    zp, _ = make_backup(tmp_path, users=30, password="Right-Pass-1")
+    job = client.post("/api/jobs", content=zp.read_bytes(), headers=h).json()
+    client.post(f"/api/jobs/{job['id']}/start", json={"password": "Right-Pass-1", "money_unit": "toman"}, headers=h)
+    assert wait(client, job["id"])["status"] == "completed"
+    r = client.post(f"/api/jobs/{job['id']}/start", json={"password": "wrong"}, headers=h)
+    assert r.status_code == 409
+    assert client.get(f"/api/jobs/{job['id']}").json()["status"] == "completed"
+
+
+def test_bad_previous_job_does_not_strand_job(app_client, tmp_path):
+    client, _ = app_client
+    h = login(client)
+    zp, _ = make_backup(tmp_path, users=30)
+    job = client.post("/api/jobs", content=zp.read_bytes(), headers=h).json()
+    r = client.post(f"/api/jobs/{job['id']}/start", json={"money_unit": "toman", "previous_job_id": "nope"},
+                    headers=h)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "job.bad_previous"
+    r = client.post(f"/api/jobs/{job['id']}/start", json={"money_unit": "toman"}, headers=h)
+    assert r.status_code == 202
+    assert wait(client, job["id"])["status"] == "completed"
+
+
+def test_delete_running_job_removes_workspace_after_stop(app_client, tmp_path):
+    client, manager = app_client
+    h = login(client)
+    zp, _ = make_backup(tmp_path, users=20000)
+    job = client.post("/api/jobs", content=zp.read_bytes(), headers=h).json()
+    ws = manager.get(job["id"]).workspace
+    client.post(f"/api/jobs/{job['id']}/start", json={"money_unit": "toman"}, headers=h)
+    assert client.delete(f"/api/jobs/{job['id']}", headers=h).status_code == 200
+    deadline = time.time() + 60
+    while ws.exists() and time.time() < deadline:
+        time.sleep(0.1)
+    assert not ws.exists()

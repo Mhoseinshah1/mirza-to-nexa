@@ -263,6 +263,8 @@ def create_app(manager: JobManager, *, port: int, launch_token: str) -> FastAPI:
         job = job_or_404(job_id)
         if isinstance(job, JSONResponse):
             return job
+        if job.status not in JobManager.STARTABLE:
+            return _err(409, "job.bad_state", "این عملیات در وضعیت فعلی قابل شروع نیست.")
         body: dict[str, Any] = await request.json()
         password = body.get("password") or None
         if password is not None and not isinstance(password, str):
@@ -271,7 +273,6 @@ def create_app(manager: JobManager, *, port: int, launch_token: str) -> FastAPI:
             try:
                 await run_in_threadpool(verify_password, job.archive_path, password)
             except MigrationError as exc:
-                job.status = "awaiting_password"
                 return _mig(exc)
         options = {
             "password": password,

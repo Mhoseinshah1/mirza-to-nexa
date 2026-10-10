@@ -38,11 +38,12 @@ def _utf8_console() -> None:
 def serve(port: int | None = None, open_browser: bool = True, launch_token: str | None = None) -> None:
     import uvicorn
 
-    from .jobs import JobManager
+    from .jobs import JobManager, sweep_stale_workspaces
     from .pipeline import run_job
     from .server import create_app
     from .settings import Settings
 
+    sweep_stale_workspaces()
     port = port or _free_port()
     token = launch_token or secrets.token_urlsafe(24)
     manager = JobManager(Settings.load(), run_job)

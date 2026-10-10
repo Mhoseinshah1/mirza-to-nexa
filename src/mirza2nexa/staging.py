@@ -70,6 +70,8 @@ class Staging:
         self.tables: dict[str, TableStats] = {}
         self.warnings: dict[str, int] = {}
         self.unrepresentable = 0
+        self.current_file = 0
+        self._defined_in: dict[str, int] = {}
         self._pending: dict[str, list[tuple]] = {}
         self._colidx_cache: dict[tuple[str, tuple[str, ...]], list[int | None]] = {}
         self.conn.execute("CREATE TABLE trial_user (id TEXT PRIMARY KEY) WITHOUT ROWID")
@@ -79,6 +81,13 @@ class Staging:
         cols = t.column_names()
         types = {c.name: c.type for c in t.columns}
         existing = self.tables.get(t.name)
+        first_file = self._defined_in.setdefault(t.name, self.current_file)
+        if existing is not None and first_file != self.current_file:
+            # Two dump files (e.g. an old partial export next to a full one) define the same
+            # table: merging them would silently create duplicates. Refuse instead.
+            raise SchemaUnknown("یک جدول در چند فایل SQL داخل ZIP تعریف شده است؛ ادغام خودکار انجام نمی‌شود. "
+                                "فقط فایل بکاپ کامل را در ZIP قرار دهید.",
+                                code="schema.table_defined_twice", detail=f"table {t.name}")
         if existing is not None:
             # phpMyAdmin re-emits keys via ALTER TABLE; columns cannot change mid-dump.
             if existing.columns != cols:
@@ -101,6 +110,9 @@ class Staging:
     # ---- rows ----------------------------------------------------------------------
     def on_row(self, ev: RowEvent) -> None:
         stats = self.tables.get(ev.table)
+        if stats is None and ev.table in rules.SOURCE_TABLES:
+            raise SchemaUnknown("داده جدول اصلی بدون تعریف ساختار (CREATE TABLE) آمده است؛ نسخه ساختار قابل تشخیص نیست.",
+                                code="schema.insert_without_create", detail=f"table {ev.table}")
         if stats is None:
             # INSERT without a CREATE TABLE: count it under its name, never store it.
             stats = TableStats(name=ev.table, columns=ev.columns, column_types={})
@@ -176,8 +188,9 @@ def stage_dumps(sql_files: list[Path], db_path: Path, *, cancel: CancelToken | N
     done_before = 0
     result_files = []
     try:
-        for path in sql_files:
+        for index, path in enumerate(sql_files):
             size = path.stat().st_size
+            staging.current_file = index
 
             def _p(done: int, _total: int | None, _base: int = done_before) -> None:
                 if progress:

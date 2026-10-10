@@ -80,7 +80,56 @@ def _verify_written(stage_dir: Path) -> dict[str, int]:
     return totals
 
 
+_SQL_READABLE = """
+WITH b AS (SELECT trim(c_Balance, ' ' || char(9, 10, 11, 12, 13)) AS t FROM src_user)
+SELECT t FROM b WHERE
+  (t GLOB '[0-9]*' AND t NOT GLOB '*[^0-9]*' AND length(t) BETWEEN 1 AND 19)
+  OR (t GLOB '-[0-9]*' AND substr(t, 2) NOT GLOB '*[^0-9]*' AND length(t) BETWEEN 2 AND 20)
+"""
+
+
+def _source_recount(db_path: Path) -> tuple[int, int]:
+    """Readable-balance count and sum straight from the staged source, using SQLite GLOB
+    matching — a code path independent of the converter's regex parsing."""
+    import sqlite3
+
+    conn = sqlite3.connect(db_path)
+    try:
+        n = total = 0
+        for (t,) in conn.execute(_SQL_READABLE):
+            n += 1
+            total += int(t)
+        return n, total
+    finally:
+        conn.close()
+
+
+def _cleanup_plaintext(workspace: Path) -> None:
+    """Remove every derived plaintext artefact (extracted SQL, staging DB, staged records)."""
+    import shutil
+
+    for name in ("sql", "stage", "out"):
+        shutil.rmtree(workspace / name, ignore_errors=True)
+    for name in ("staging.sqlite", "staging.sqlite-journal", "diff.sqlite"):
+        (workspace / name).unlink(missing_ok=True)
+
+
 def convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
+                    cancel: CancelToken | None = None, stage: StageFn | None = None,
+                    progress: ProgressCb | None = None, on_inspection: Callable[[Any], None] | None = None,
+                    ) -> ConvertResult:
+    try:
+        return _convert_archive(archive, workspace, opts, cancel=cancel, stage=stage, progress=progress,
+                                on_inspection=on_inspection)
+    except BaseException:
+        _cleanup_plaintext(workspace)
+        raise
+    finally:
+        opts.password = None
+        opts.package_passphrase = None
+
+
+def _convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
                     cancel: CancelToken | None = None, stage: StageFn | None = None,
                     progress: ProgressCb | None = None, on_inspection: Callable[[Any], None] | None = None,
                     ) -> ConvertResult:
@@ -144,6 +193,15 @@ def convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
     w["independent_recount_matches"] = independent_ok
     if not independent_ok:
         outcome.block("FINANCIAL_RECONCILIATION_MISMATCH")
+    # Source side, independent of the converter: written credits − written debts + money the
+    # converter held back must equal the readable total recomputed from the staged source.
+    src_n, src_sum = _source_recount(db_path)
+    held = int(w["held_for_review"]["amount_minor"]) + int(w["not_customers_invalid_identity"]["amount_minor"])
+    source_ok = (src_sum == written["credits_amount"] - written["debts_amount"] + held
+                 and src_n == w["source_readable_balances"]["count"])
+    w["source_recount"] = {"readable_count": src_n, "readable_sum_minor": str(src_sum), "matches": source_ok}
+    if not source_ok:
+        outcome.block("SOURCE_RECOUNT_MISMATCH")
     progress(1, 3)
 
     diff = None
