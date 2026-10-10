@@ -2,10 +2,12 @@
 
 Local-first, offline migration converter for password-protected ZIP archives containing Mirza SQL exports, producing a validated, versioned NEXA migration package.
 
-> **Status: working offline converter for the evidenced NEXA read set (`user`, `invoice`, `product`), tested on synthetic data only.**
-> The `.nxpkg` is a *proposed* contract: it is **not** confirmed importable into NEXA production until the NEXA-side importer
-> (`docs/NEXA_IMPORTER_PLAN.md`) is built and passes its tests. Mappings that need real data or owner decisions are blocked, not guessed
-> (`docs/MAPPING.md` §"Blocked").
+> **Status (v0.2.0, Phase 2): full-schema offline converter.** Every table of a Mirza dump is catalogued
+> (`docs/SOURCE_TABLES.md`) and converted, archived, sent to review or excluded with a documented reason
+> (`reports/coverage.json`). Payment history, wallet history, service operations, resellers, discounts/referrals and
+> support are preserved as read-only archives. Tested on synthetic data; v0.1.0 was run by the operator on a real
+> backup (197,952 customers, reconciliation passed). The `.nxpkg` is a *proposed* contract: it is **not** confirmed
+> importable into NEXA production until the NEXA-side importer (`docs/NEXA_IMPORTER_PLAN.md`) exists and passes its tests.
 
 ## Quick start
 * **Windows:** see [`docs/INSTALL_WINDOWS_FA.md`](docs/INSTALL_WINDOWS_FA.md) (prebuilt exe from CI artifacts, or `pip install .` then `mirza2nexa`).
@@ -17,6 +19,13 @@ Local-first, offline migration converter for password-protected ZIP archives con
 | Doc | Content |
 |---|---|
 | `docs/MAPPING.md` | per-entity source→target mapping, keys, validation, blockers, reconciliation |
+| `docs/SOURCE_TABLES.md`, `docs/evidence/mirza_tables.json` | all Mirza tables: cited DDL, vocabularies, sensitivity, class |
+| `docs/PACKAGE_CONTRACT.md` | package content schema 1.1.0: every file and record type |
+| `docs/MODULES.md` | catalogue + domain-module framework and the module contract |
+| `docs/FINANCE_HISTORY.md` | payment and wallet history archives and their reconciliation |
+| `docs/SERVICES_AND_PRODUCTS.md` | service operations, panels, products/categories mapping proposal |
+| `docs/RESELLER_CONTRACT.md`, `docs/ENGAGEMENT_AND_SUPPORT.md` | resellers, discounts/referrals, support/tickets |
+| `docs/DATA_PROTECTION.md` | sensitivity policy, redaction, retention and access proposal |
 | `docs/NEXA_EVIDENCE.md` | cited evidence from `nexa-bot@9e604def` (what NEXA knows about Mirza, and what it does not) |
 | `docs/NXPKG_FORMAT.md` | byte-level container format and trust model |
 | `docs/SECURITY.md` | threat model and the tests covering each threat |

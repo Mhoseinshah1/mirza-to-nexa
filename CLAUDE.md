@@ -39,13 +39,15 @@ For each stage publish source SHA, tests run, outstanding blockers, and next gat
 ## Current state (gate tracking)
 | Gate | State | Evidence |
 |---|---|---|
-| 1 Mapping with evidence | done for `user`/`invoice`/`product`; other tables blocked | `docs/NEXA_EVIDENCE.md`, `docs/MAPPING.md` |
+| 1 Mapping with evidence | all 48 known tables catalogued (Phase 2); 18 fork tables have operator column lists only | `docs/SOURCE_TABLES.md`, `docs/evidence/mirza_tables.json`, `docs/MAPPING.md` |
 | 2 Archive intake + safety tests | done | `tests/test_archive.py` |
 | 3 Streaming parser + schema detection | done | `tests/test_sqldump.py`, `tests/test_conversion.py` |
-| 4 Transform + reconciliation + review queue | done (synthetic data) | `tests/test_conversion.py`, `tests/test_perf.py` |
+| 4 Transform + reconciliation + review queue | done incl. Phase 2 archives (payments, wallet history, services, agents, engagement, support, config) on synthetic data; v0.1.0 run on a real backup by the operator | `tests/test_*`, `tests/test_modules_contract.py`, `tests/test_perf.py` |
 | 5 Local Persian UI + localhost security | done | `tests/test_server.py`, `tests/test_e2e.py` |
 | 6 Package contract + importer proposal | container done; NEXA importer **not built** (needs owner approval) | `docs/NXPKG_FORMAT.md`, `docs/NEXA_IMPORTER_PLAN.md` |
 | 7 Rehearsal | synthetic E2E only; real/staging snapshot **not run** | — |
 
 Dev commands: `pip install -e ".[dev]"`, `ruff check src tests packaging`, `pytest`, `pytest -m e2e`, `pytest -m perf -s`.
 Synthetic fixtures are generated at test time (`mirza2nexa.synth`); never add real backups, `.zip`, `.sql`, `.nxpkg` or `.nxkey` files.
+
+Phase 2 framework: every table is resolved through `catalogue.py`; domain converters live in `src/mirza2nexa/modules/` and follow `docs/MODULES.md`. A new Mirza table needs a catalogue entry with evidence before any of its data is staged.

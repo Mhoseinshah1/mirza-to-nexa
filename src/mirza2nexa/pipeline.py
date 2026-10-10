@@ -165,9 +165,25 @@ def _convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
     writer = PackageWriter(stage_dir)
     sinks: dict[str, Any] = {}
 
+    class _SchemaSink:
+        """Every migration record carries a versioned ``schema`` (Phase-1 shapes get ``m2n.<type>.v1``)."""
+
+        def __init__(self, inner):
+            self._inner = inner
+
+        def write(self, obj):
+            if isinstance(obj, dict) and "record_type" in obj and "schema" not in obj:
+                obj = {**obj, "schema": f"m2n.{obj['record_type']}.v1"}
+            self._inner.write(obj)
+
+        def close(self):
+            self._inner.close()
+
     def open_jsonl(rel: str):
         rel = rel if rel.startswith("records/") else f"reports/{rel}"
-        sinks[rel] = writer.open_jsonl(rel)
+        if rel in sinks:
+            return sinks[rel]
+        sinks[rel] = _SchemaSink(writer.open_jsonl(rel))
         return sinks[rel]
 
     conv = Converter(db_path, staged.tables, profile, fingerprint, open_jsonl, money_unit=opts.money_unit,

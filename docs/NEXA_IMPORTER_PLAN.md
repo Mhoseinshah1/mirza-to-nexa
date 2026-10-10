@@ -127,3 +127,60 @@ Each module below may be retired from navigation **only after all four condition
   them is mapped.
 * Decide on resellers (OQ-LWD-03) and on renewal semantics (OQ-LSR-03).
 * Decide whether NEXA wants an Ed25519 converter signature in addition to AEAD (`docs/NXPKG_FORMAT.md`).
+
+---
+
+## 8. Phase 2: history destinations and operational plan
+
+Phase 2 packages (`package_schema_version` 1.1.0, see `PACKAGE_CONTRACT.md`) carry history and archives
+alongside the operational records. The rule for all of them is the same:
+* NEXA stores history in **read-only legacy tables**, scoped per tenant and keyed by `idempotency_key`;
+* it never replays history into live state machines;
+* it never posts history to the ledger.
+
+### 8.1 Destination tables (all new, proposed; nothing in `nexa-bot` exists yet for these)
+
+| Package file | Proposed NEXA table | Visible in | Access |
+|---|---|---|---|
+| `payments.jsonl` | `legacy_payment_history` (amount_minor, currency, method_raw, direction, outcome, times raw+parsed, customer_id nullable, provenance) | Customer page → «سوابق پرداخت قدیمی» | finance role |
+| `wallet_history.jsonl` + `wallet_history_checks.jsonl` | `legacy_wallet_transactions` + `legacy_wallet_history_checks` | Customer wallet → «تاریخچه کیف پول قدیمی» (read-only, labelled as legacy evidence) | finance role |
+| `invoices.jsonl` | existing `legacy_invoice_archive` | existing legacy invoices page, later a customer history tab | support and finance |
+| `services.jsonl` | existing `legacy_service_candidates` → P6 adoption | existing legacy services page | admin |
+| `service_operations.jsonl`, `service_cancellation_requests.jsonl` | `legacy_service_operations`, `legacy_cancellation_requests` | Service detail → «سوابق عملیات قدیمی» | support |
+| `products.jsonl`, `category_catalogue.jsonl`, `categories.jsonl` | existing `legacy_product_reviews` + `legacy_category_labels` | existing legacy products page | catalog admin |
+| `panel_registry.jsonl`, `panels.jsonl` | panel-map wizard input only; **no credentials**, which are entered through NEXA's secret flow | adoption wizard | owner |
+| `agents/*.jsonl` | `legacy_agent_profiles`, `legacy_agent_price_levels`, `legacy_agent_history` | Reseller archive page | owner (role activation needs OQ-LWD-03) |
+| `engagement/*.jsonl` | `legacy_discount_history`, `legacy_referrals`, `legacy_wheel_results` | Marketing archive | marketing |
+| `support/*.jsonl` | `legacy_support_threads` + `legacy_support_messages` (closed, read-only) | Customer page → «پشتیبانی قدیمی» | support (personal data, audited reads) |
+| `archive/*.jsonl` | `legacy_raw_archive(table, key, fields jsonb)` | Owner-only archive browser | owner |
+| `configuration/*.jsonl` | not imported; operators read them to configure NEXA templates and settings by hand | — | owner |
+
+### 8.2 Execution order (each step is idempotent and has a dry run)
+
+1. **Verify:** check the container, refuse on blockers and on any live-state flag set to `true`, and show
+   the fingerprint for the operator to confirm out-of-band.
+2. **Customers, then opening balances and debts**, as in §3. This is the only financial operation.
+3. **Read-only history:** payments, wallet history, invoices, service operations and support, in batches
+   of 5k. Each table gets `UNIQUE (tenant_id, idempotency_key)`, so a repeated import is a no-op.
+4. **Review proposals:** products, categories, panels and agents. Each goes into its existing or new
+   review table in `PENDING_REVIEW`.
+5. **Reconcile:** NEXA recounts every file and must match `reconciliation.json` and `coverage.json`
+   exactly before the run is marked complete.
+6. **Adoption (P6):** for each service, a separate operator approval and a live panel check. This is the
+   only step that touches a panel.
+
+### 8.3 Additional acceptance tests
+
+* **History is inert.** After importing history, the sums of the wallet ledger, orders, payments and
+  revenue are exactly what they were before.
+* **Re-import is a no-op.** Importing the same package twice leaves every row count unchanged.
+* **Changed history from a later backup:** records that were added are inserted. Records that changed are
+  *not* overwritten; they become conflicts for review.
+* **Support text is restricted.** A role without the support permission gets 403 on support text.
+* **Package-level refusal.** A package with an unknown record type, or with `schema` major version 2, is refused.
+
+### 8.4 Retiring the temporary Mirza pages (after approval)
+
+§5 still applies. The new history views listed in §8.1 replace the legacy invoice, debt and product pages
+for **viewing**. Only after a full successful import, all review rows resolved and the owner's approval may
+the temporary navigation entries be hidden. The tables underneath are never dropped.
