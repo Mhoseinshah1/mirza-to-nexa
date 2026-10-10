@@ -22,6 +22,7 @@ Local-first, offline migration converter for password-protected ZIP archives con
 | `docs/SOURCE_TABLES.md`, `docs/evidence/mirza_tables.json` | all Mirza tables: cited DDL, vocabularies, sensitivity, class |
 | `docs/PACKAGE_CONTRACT.md` | package content schema 1.2.0: every file and record type |
 | `docs/MODULES.md` | catalogue + domain-module framework and the module contract |
+| `docs/OWNERSHIP.md`, `docs/OWNERSHIP_REVIEW.md` | ownership model from evidence; bulk administrator review (plan/commit, audit, undo, seal, read-only panel check, signed export) |
 | `docs/FINANCE_HISTORY.md` | payment and wallet history archives and their reconciliation |
 | `docs/SERVICES_AND_PRODUCTS.md` | service operations, panels, products/categories mapping proposal |
 | `docs/RESELLER_CONTRACT.md`, `docs/ENGAGEMENT_AND_SUPPORT.md` | resellers, discounts/referrals, support/tickets |
@@ -42,7 +43,7 @@ works offline); Windows build via PyInstaller in CI.
 ## Boundaries
 - Source: a locally selected ZIP containing an SQL backup of Mirza. The archive/password and extracted data never go to GitHub or a remote API.
 - Target: a *versioned package* for a separately implemented, authorized NEXA importer. **Never execute untrusted source SQL against the NEXA database.**
-- Interface: a local web UI served only on `127.0.0.1`, intended for Windows desktop; no internet dependency for processing.
+- Interface: a local web UI served only on `127.0.0.1`, intended for Windows desktop; no internet dependency for processing. The only optional outbound call is the read-only panel status check of the ownership review (off by default; only the panel login and per-user status GET are allowed, `docs/OWNERSHIP_REVIEW.md` §5).
 - Migration: dry-run + review + deterministic manifest first; production import requires separately approved NEXA changes.
 - Existing NEXA production and Mirza staging are out of scope for this repository.
 

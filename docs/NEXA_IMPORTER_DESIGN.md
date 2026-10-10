@@ -209,6 +209,26 @@ the converter's ownership state and evidence (see `SERVICES_AND_PRODUCTS.md`).
 The import never provisions, renews, disables or deletes a panel service. A panel adapter mock in the
 acceptance suite asserts zero calls during import.
 
+### 8.1 Administrator ownership decisions (`ownership-decisions.json`, `OWNERSHIP_REVIEW.md`)
+
+An optional companion file produced by the converter's bulk ownership review. The importer:
+
+1. refuses it unless `schema == m2n.ownership_decisions.v1`, its HMAC verifies under
+   `HKDF-SHA256(package secret, info = "nxpkg-v1/ownership-decisions")`, `import_id` and
+   `source_fingerprint` equal the package manifest, `sealed == true` and `audit.ok == true`;
+2. matches every entry to `records/service_ownership.jsonl` by `key` and refuses the file if any
+   `binding` differs from `SHA-256(canonical record)` (decision made on a different record);
+3. applies classes as follows, never merging them:
+
+| `class` / `basis` | Importer action |
+|---|---|
+| `PROVEN` / `EVIDENCE` | as `CONFIRMED_*` above |
+| `ADMIN_ATTESTED` / `ADMIN_ATTESTATION` | may enter P6 adoption with owner = `invoice.id_user` **only**; recorded as `ownership_basis = ADMIN_ATTESTATION` (never as proven) with the batch id in the audit log |
+| `REJECTED` / `ADMIN_REJECTION` | quarantine `SERVICE_OWNERSHIP_REJECTED_BY_ADMIN` |
+| `QUARANTINED` / `SYSTEM_QUARANTINE`, `PENDING`, `stale: true` | quarantine as in the table above |
+
+Without this file every `AMBIGUOUS_*` service stays quarantined.
+
 ## 9. Tickets, agents, product proposals
 
 * **Tickets / support:** imported as closed read-only threads; message text is personal data, readable only

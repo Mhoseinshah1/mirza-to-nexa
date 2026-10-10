@@ -208,6 +208,18 @@ def render_readiness_html(readiness: dict[str, Any]) -> str:
     if own.get("available") is False:
         a('<p class="small muted">تحلیل مالکیت سرویس‌ها در این بکاپ در دسترس نبود.</p>')
     a(_count_table(own.get("by_decision"), OWNERSHIP_DECISION_FA, "تصمیم"))
+    ar = _d(own.get("admin_review"))
+    if ar:
+        a("<h3>بررسی مدیر (جدا از مالکیت اثبات‌شده)</h3>")
+        rows = [("proven", "مالکیت اثبات‌شده"), ("admin_attested", "تأیید مدیر (اثبات نشده)"),
+                ("pending", "در انتظار تصمیم"), ("rejected", "رد شده — قرنطینه"), ("quarantined", "قرنطینه سیستمی"),
+                ("stale", "تصمیم‌های منسوخ")]
+        body = "".join(f'<dt>{_e(fa)} <span class="code">{_e(k)}</span></dt><dd>{_n(ar.get(k)) or "—"}</dd>'
+                       for k, fa in rows)
+        a(f'<dl>{body}<dt>قفل برای Import نهایی <span class="code">sealed</span></dt>'
+          f'<dd>{_yes_no(ar.get("sealed"))}</dd></dl>')
+        a('<p class="small muted">«تأیید مدیر» پذیرش مالک ثبت‌شده در فاکتور میرزا با تصمیم صریح مدیر است و '
+          "اثبات مالکیت محسوب نمی‌شود.</p>")
     a("</section>")
 
     # panels
@@ -217,7 +229,7 @@ def render_readiness_html(readiness: dict[str, Any]) -> str:
     a(_dl([(k, _n(pn.get(k))) for k in ("registry_rows", "codes_in_invoices", "mapped", "pending_mapping")]
           + [("status", (_e(PANEL_STATUS_FA.get(str(pst)) or humanise(str(pst)))
                          + f' <span class="code">{_e(pst)}</span>') if pst is not None else None)]))
-    a('<p class="small muted">مبدل هرگز به پنل‌ها وصل نمی‌شود و هیچ سرویسی را ایجاد، تمدید یا حذف نمی‌کند.</p>')
+    a('<p class="small muted">مبدل هرگز به پنل‌ها وصل نمی‌شود؛ بررسی زنده اختیاری فقط وضعیت سرویس را می‌خواند و هیچ سرویسی را ایجاد، تمدید یا حذف نمی‌کند.</p>')
     a("</section>")
     a("</div>")
 

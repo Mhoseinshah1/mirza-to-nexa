@@ -43,7 +43,7 @@ For each stage publish source SHA, tests run, outstanding blockers, and next gat
 | 2 Archive intake + safety tests | done | `tests/test_archive.py` |
 | 3 Streaming parser + schema detection | done | `tests/test_sqldump.py`, `tests/test_conversion.py` |
 | 4 Transform + reconciliation + review queue | done incl. Phase 2 archives and Phase 3 readiness (service ownership model, wallet difference causes, panel/product mapping inputs, review taxonomy) on synthetic data; real-backup re-run of v0.3.0 by the operator pending | `tests/test_*`, `tests/test_ownership.py`, `tests/test_wallet_causes.py`, `tests/test_readiness.py`, `docs/OWNERSHIP.md`, `docs/FINANCE_HISTORY.md` |
-| 5 Local Persian UI + localhost security | done | `tests/test_server.py`, `tests/test_e2e.py` |
+| 5 Local Persian UI + localhost security | done; v0.4.0 adds bulk ownership review (plan/commit, audit chain, undo, seal; optional read-only panel status check, off by default) | `tests/test_server.py`, `tests/test_e2e.py`, `tests/test_ownership_review*.py`, `docs/OWNERSHIP_REVIEW.md` |
 | 6 Package contract + importer proposal | content contract 1.2.0; importer **design** done, NEXA importer **not built** (needs owner approval) | `docs/NXPKG_FORMAT.md`, `docs/PACKAGE_CONTRACT.md`, `docs/NEXA_IMPORTER_DESIGN.md` |
 | 7 Rehearsal | synthetic E2E only; real/staging snapshot **not run** | — |
 

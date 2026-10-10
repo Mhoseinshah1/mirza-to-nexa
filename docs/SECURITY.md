@@ -23,7 +23,11 @@ customer data. The table lists each threat, the defence against it, and the test
 | Passwords in logs, history or reports | Passwords are only function arguments and are cleared after use; there is no access log; history keeps aggregates only | `test_server.py`, `test_conversion.py` |
 | Double credit, debt auto-settlement, history turned into payments | See `docs/MAPPING.md` (idempotency keys, flags, reconciliation) | `test_conversion.py` |
 | Unknown schema version | Fails closed: `SchemaUnknown`, or the dependent entities are blocked | `test_conversion.py` |
-| Telemetry or exfiltration | There are no outbound requests in the code and no analytics; the CSP forbids external `connect-src` | review + CSP |
+| Telemetry or exfiltration | No analytics; the only outbound request is the optional read-only panel status check below (off by default); the CSP forbids external `connect-src` | review + CSP |
+| Panel mutation during the ownership review | `panel_probe.ReadOnlyHttp` allows exactly `POST /api/admin/token` and `GET /api/user/{username}` (validated name) and refuses anything else before a socket opens; redirects refused; TLS always verified; no proxy; disabled unless `panel_live_check_enabled` | `test_ownership_review_api.py` (fake panel on 127.0.0.1 records every request) |
+| Panel credentials leaking | Held only by the probe for one run; the login form is sent once and dropped; never stored, logged, returned or exported; only a status class is kept | `test_ownership_review_api.py` |
+| Bulk ownership decision assigning a wrong owner | Only `invoice.id_user` can be accepted; serious conflicts and missing owners are quarantine-only; plan → typed-count commit; stale plans refused; decisions bound to the record hash; `ADMIN_ATTESTED` never counted as proven | `test_ownership_review.py` |
+| Tampering with the decision history or export | SHA-256 hash-chained audit log (`/audit/verify`), seal before import, export authenticated with HMAC under a key derived from the package secret | `test_ownership_review.py` |
 
 ## Residual risks and limits
 

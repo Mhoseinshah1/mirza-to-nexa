@@ -29,7 +29,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from . import __version__, readiness_html, report_fa
+from . import __version__, ownership_api, readiness_html, report_fa
 from .archive import inspect_archive, verify_password
 from .errors import MigrationError
 from .jobs import Job, JobManager, clear_history, read_history
@@ -489,7 +489,8 @@ def create_app(manager: JobManager, *, port: int, launch_token: str) -> FastAPI:
             data = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
-        return data if isinstance(data, dict) else None
+        # administrator ownership decisions are added beside (never into) the proven counts
+        return ownership_api.readiness_overlay(review_sessions, data) if isinstance(data, dict) else None
 
     @app.get("/api/jobs/{job_id}/readiness")
     async def readiness(job_id: str) -> Response:
@@ -527,6 +528,11 @@ def create_app(manager: JobManager, *, port: int, launch_token: str) -> FastAPI:
             "Content-Disposition": f'attachment; filename="migration-readiness-{job.id}.html"',
             "Content-Security-Policy": REPORT_HTML_CSP,
         })
+
+    # ---- bulk ownership review (docs/OWNERSHIP_REVIEW.md) ------------------------------
+    review_sessions = ownership_api.Sessions()
+    app.state.m2n_reviews = review_sessions
+    ownership_api.register(app, manager, job_or_404, review_sessions)
 
     @app.get("/api/jobs/{job_id}/coverage.csv")
     async def coverage_csv(job_id: str) -> Response:

@@ -171,6 +171,32 @@ def _hkdf(master: bytes, info: bytes) -> bytes:
 
 def derive_keys(kdf: dict, nonce_prefix: bytes, *, passphrase: str | None, key: bytes | None) -> PackageKeys:
     """Derive the per-package encryption key and the key-check value from the user secret."""
+    master = _master_key(kdf, passphrase=passphrase, key=key)
+    enc_key = _hkdf(master, HKDF_INFO_ENC + nonce_prefix)
+    return PackageKeys(enc_key=enc_key, key_check=_key_check(master))
+
+
+def _key_check(master: bytes) -> bytes:
+    check_key = _hkdf(master, HKDF_INFO_CHECK)
+    return hmac.new(check_key, KEY_CHECK_MSG, hashlib.sha256).digest()[:16]
+
+
+def derive_aux_key(header: dict, info: bytes, *, passphrase: str | None, key: bytes | None) -> bytes:
+    """A key for a companion document of this package (e.g. ownership decisions).
+
+    Derived from the same package secret with a distinct HKDF ``info`` so it never equals the
+    encryption key. The secret is verified against the header's ``key_check`` first, so a wrong
+    secret is refused instead of silently producing an unverifiable MAC.
+    """
+    if not info or info.startswith(HKDF_INFO_ENC) or info == HKDF_INFO_CHECK:
+        raise PackageError(code="package.invalid", detail="reserved hkdf info")
+    master = _master_key(header["kdf"], passphrase=passphrase, key=key)
+    if not hmac.compare_digest(_key_check(master), b64d(header["key_check"], expect_len=16)):
+        raise WrongPackageKey()
+    return _hkdf(master, info)
+
+
+def _master_key(kdf: dict, *, passphrase: str | None, key: bytes | None) -> bytes:
     if kdf["name"] == "scrypt":
         if passphrase is None:
             raise PackageError(
@@ -190,10 +216,7 @@ def derive_keys(kdf: dict, nonce_prefix: bytes, *, passphrase: str | None, key: 
         master = key
     else:  # pragma: no cover - validated earlier
         raise PackageError(code="package.invalid", detail="unknown kdf")
-    enc_key = _hkdf(master, HKDF_INFO_ENC + nonce_prefix)
-    check_key = _hkdf(master, HKDF_INFO_CHECK)
-    key_check = hmac.new(check_key, KEY_CHECK_MSG, hashlib.sha256).digest()[:16]
-    return PackageKeys(enc_key=enc_key, key_check=key_check)
+    return master
 
 
 # --------------------------------------------------------------------------- header

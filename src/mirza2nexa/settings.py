@@ -40,6 +40,9 @@ class Settings:
     history_limit: int = 50
     # Delete extracted SQL immediately after parsing (recommended).
     delete_sql_after_parse: bool = True
+    # Read-only live status check of legacy services on a panel (docs/OWNERSHIP_REVIEW.md §5).
+    # Off by default: when on, the app contacts the panel URL the administrator enters.
+    panel_live_check_enabled: bool = False
 
     def archive_limits(self) -> ArchiveLimits:
         mb = 1024 * 1024
@@ -66,6 +69,9 @@ class Settings:
             problems.append("min_free_disk_mb")
         if not 0 <= self.history_limit <= 1000:
             problems.append("history_limit")
+        for name in ("delete_sql_after_parse", "panel_live_check_enabled"):
+            if not isinstance(getattr(self, name), bool):
+                problems.append(name)
         if self.workspace_dir:
             p = Path(self.workspace_dir)
             if not p.is_absolute() or not p.is_dir():

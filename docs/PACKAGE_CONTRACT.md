@@ -109,6 +109,17 @@ the record itself and refuses unknown values (gate G5).
 * `mirza2nexa schema BACKUP.zip -o schema.json` exports table/column structure and row counts (no values, no
   defaults) so a fork's tables can be catalogued without sharing the backup.
 
+## Companion file: `ownership-decisions.json` (not inside the package)
+
+The package is immutable once written, so administrator ownership decisions taken afterwards in the
+bulk ownership review (`OWNERSHIP_REVIEW.md`) travel as a separate, authenticated companion file
+(`schema: m2n.ownership_decisions.v1`). It carries `import_id`, `source_fingerprint`, `sealed`, the
+audit-chain head, totals per class (`PROVEN`, `ADMIN_ATTESTED`, `PENDING`, `REJECTED`, `QUARANTINED`)
+and one entry per service (`key`, `invoice_key`, `class`, `basis`, `review_state`, `batch_id`, `binding`,
+`stale`). `authentication.mac` is HMAC-SHA256 over the canonical JSON of the document without
+`authentication`, keyed with HKDF-SHA256 of the package secret (`info = nxpkg-v1/ownership-decisions`).
+Importer rules: `NEXA_IMPORTER_DESIGN.md` §8.1. `ADMIN_ATTESTED` is never proof of ownership.
+
 ## Manifest additions (1.1.0)
 
 These fields are added on top of the 1.0.0 manifest:
