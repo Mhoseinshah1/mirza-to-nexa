@@ -167,14 +167,16 @@ class Converter:
         return p
 
     def _review(self, *, kind: str, code: str, entity: str, table: str, pk: str | None,
-                severity: str = "blocker", data: dict[str, Any] | None = None) -> None:
+                severity: str = "blocker", data: dict[str, Any] | None = None,
+                record_also_exported: bool = False) -> None:
         self.review.write({
             "kind": kind, "severity": severity, "code": code, "message": self.messages.get(code, code),
             "entity": entity, "source_ref": {"table": table, "pk": pk}, "data": data or {},
         })
         self.out.review_count += 1
-        c = self.out.counts.setdefault(entity, {"source": 0, "converted": 0, "review": 0, "skipped": 0})
-        c["review"] += 1
+        if not record_also_exported:  # a flag on an exported record is not a separate row
+            c = self.out.counts.setdefault(entity, {"source": 0, "converted": 0, "review": 0, "skipped": 0})
+            c["review"] += 1
 
     def _count(self, entity: str, key: str, n: int = 1) -> None:
         c = self.out.counts.setdefault(entity, {"source": 0, "converted": 0, "review": 0, "skipped": 0})
@@ -452,7 +454,7 @@ class Converter:
         for label in sorted(categories):
             cats.write({"record_type": "legacy_category_label", "idempotency_key": f"legacy:category:{label}",
                         "label": label, "product_count": categories[label], "source_column": f"product.{cat_col}",
-                        "auto_create": False})
+                        "auto_create": False, "provenance": self._provenance("product", None)})
         self._count("categories", "source", len(categories))
         self._count("categories", "converted", len(categories))
 
@@ -544,7 +546,7 @@ class Converter:
             if cls == "ORPHAN_OWNER":
                 orphans += 1
                 self._review(kind="invoice", code="INVOICE_WITHOUT_CUSTOMER", entity="invoices", table="invoice",
-                             pk=key, severity="warning", data={"status_raw": status})
+                             pk=key, severity="warning", data={"status_raw": status}, record_also_exported=True)
         self.out.reconciliation["invoices"] = {
             "source_rows": self.tables["invoice"].rows,
             "archived": self.out.counts.get("invoices", {}).get("converted", 0),
@@ -718,7 +720,7 @@ class Converter:
             panels.write({"record_type": "legacy_panel_code", "idempotency_key": f"legacy:panel:{cp}",
                           "code_panel": cp, "invoice_count": a["invoices"], "live_invoice_count": a["live_invoices"],
                           "service_locations": sorted(a["locations"]), "panel_id": None,
-                          "mapping_state": "OPERATOR_MUST_MAP"})
+                          "mapping_state": "OPERATOR_MUST_MAP", "provenance": self._provenance("invoice", None)})
         self._count("panels", "source", len(agg))
         self._count("panels", "converted", len(agg))
 

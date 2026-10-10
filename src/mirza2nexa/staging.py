@@ -80,6 +80,7 @@ class Staging:
         self.current_file = 0
         self._defined_in: dict[str, int] = {}
         self._pending: dict[str, list[tuple]] = {}
+        self._kv: dict[str, tuple[int, int, frozenset[str]]] = {}
         self._colidx_cache: dict[tuple[str, tuple[str, ...]], list[int | None]] = {}
         self.conn.execute("CREATE TABLE trial_user (id TEXT PRIMARY KEY) WITHOUT ROWID")
 
@@ -118,6 +119,9 @@ class Staging:
                 coldefs = ", ".join(f"{_q('c_' + c)} TEXT" for c in stored)
                 self.conn.execute(f"CREATE TABLE {_q(stats.sql_name)} (rowno INTEGER PRIMARY KEY, {coldefs})")
                 self._pending[t.name] = []
+                if spec.kv_filter and spec.kv_filter[0] in stored and spec.kv_filter[1] in stored:
+                    self._kv[t.name] = (stored.index(spec.kv_filter[0]), stored.index(spec.kv_filter[1]),
+                                        spec.kv_filter[2])
         elif t.name in rules.SOURCE_TABLES:  # case-sensitive, like legacy-inventory.ts:52-55
             stats.classified = True
             stats.missing_required = tuple(c for c in rules.REQUIRED_COLUMNS[t.name] if c not in cols)
@@ -152,6 +156,7 @@ class Staging:
             idx = [pos.get(c) for c in stats.stored_columns]
             self._colidx_cache[key] = idx
         values: list[str | None] = []
+        kv = self._kv.get(ev.table)
         for i in idx:
             if i is None:
                 values.append(None)
@@ -162,6 +167,10 @@ class Staging:
                 self.unrepresentable += 1
                 text = "\x00UNREPRESENTABLE"
             values.append(text)
+        if kv is not None:
+            key_i, value_i, allowed = kv
+            if values[key_i] not in allowed:
+                values[value_i] = None  # unknown/secret key: value never staged
         stats.digest = (stats.digest + int.from_bytes(
             hashlib.sha256(rules.js_json(values).encode("utf-8", "surrogatepass")).digest(), "big")) & _MASK
         self._pending[ev.table].append((stats.rows, *values))

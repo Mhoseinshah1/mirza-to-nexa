@@ -69,6 +69,10 @@ class TableSpec:
     columns: tuple[ColumnSpec, ...] | None = None
     open_questions: tuple[str, ...] = ()
     sensitivity: str = PUBLIC  # overall, the strictest of its columns
+    # Key-value tables (e.g. PaySetting NamePay/ValuePay): (key column, value column, allowed keys).
+    # At staging time the value of any key not in the allow-list is replaced by NULL, so
+    # gateway credentials never reach the staging database even transiently.
+    kv_filter: tuple[str, str, frozenset[str]] | None = None
 
     def column(self, name: str) -> ColumnSpec | None:
         if self.columns is None:
