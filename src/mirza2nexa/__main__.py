@@ -72,7 +72,7 @@ def serve(port: int | None = None, open_browser: bool = True, launch_token: str 
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv and argv[0] in {"convert", "verify", "compare", "synth"}:
+    if argv and argv[0] in {"convert", "verify", "compare", "synth", "selfcheck"}:
         from .cli import main as cli_main
 
         return cli_main(argv)

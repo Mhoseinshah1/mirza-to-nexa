@@ -222,8 +222,7 @@ class Staging:
 def stage_dumps(sql_files: list[Path], db_path: Path, *, cancel: CancelToken | None = None,
                 progress: ProgressFn | None = None) -> StagingResult:
     """Parse every dump file (streaming) into a fresh staging database."""
-    if not CATALOGUE.specs:  # defence in depth: never stage with an empty catalogue
-        raise RuntimeError("table catalogue is empty")
+    _modules.verify_registry()  # fail closed: never stage with a missing module or table spec
     staging = Staging(db_path)
     total = sum(p.stat().st_size for p in sql_files)
     done_before = 0

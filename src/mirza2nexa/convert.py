@@ -789,6 +789,12 @@ class Converter:
             accounted = cov["exported"] + cov["archived"] + cov["review"] + cov["skipped"]
             cov["accounted_rows"] = accounted
             self.out.coverage.append(cov)
+        from .modules import registry_status
+
+        if not registry_status()["ok"]:  # defence in depth; pipeline already refuses to start
+            self.out.block("CATALOGUE_INCOMPLETE")
+            self.blocker_messages.setdefault("CATALOGUE_INCOMPLETE",
+                                             "کاتالوگ جدول‌ها کامل بارگذاری نشده؛ هیچ نتیجه‌ای قابل اتکا نیست.")
         incomplete = [c["table"] for c in self.out.coverage
                       if c["rows"] and c["class"] is not None and (
                           c["status"] == "blocked" or (c["status"] != "excluded" and c["accounted_rows"] != c["rows"]))]

@@ -138,6 +138,12 @@ def _convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
     progress = progress or (lambda _d, _t: None)
     started = time.time()
 
+    # Fail closed before touching the archive: every converter module and table spec must be
+    # registered (a frozen build once shipped without them and silently migrated nothing).
+    from .modules import verify_registry
+
+    catalogue_status = verify_registry()
+
     stage("inspect", None)
     insp = inspect_archive(archive, opts.limits, cancel)
     if on_inspection:
@@ -266,6 +272,8 @@ def _convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
                        for n, t in sorted(staged.tables.items())},
         },
         "schema_profile": profile.to_dict(),
+        "catalogue": {"modules": catalogue_status["modules"], "specs": catalogue_status["specs"],
+                      "expected_tables": catalogue_status["expected_tables"], "ok": catalogue_status["ok"]},
         "readiness": readiness,
         "money_unit": {
             "value": opts.money_unit,

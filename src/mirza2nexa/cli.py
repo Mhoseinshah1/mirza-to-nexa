@@ -166,6 +166,16 @@ def cmd_synth(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_selfcheck(_a: argparse.Namespace) -> int:
+    """Print the module/catalogue registry state; exit 3 when anything is missing (frozen-build check)."""
+    from . import __version__
+    from .modules import registry_status
+
+    status = {"version": __version__, **registry_status()}
+    print(json.dumps(status, ensure_ascii=False))
+    return 0 if status["ok"] else 3
+
+
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(prog="mirza2nexa")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -207,6 +217,9 @@ def main(argv: list[str]) -> int:
     s.add_argument("--shift-balances", type=int, default=0)
     s.add_argument("--password-env")
     s.set_defaults(fn=cmd_synth)
+
+    sc = sub.add_parser("selfcheck", help="verify every converter module and table spec is present")
+    sc.set_defaults(fn=cmd_selfcheck)
 
     a = p.parse_args(argv)
     return a.fn(a)

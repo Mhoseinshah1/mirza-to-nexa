@@ -2,6 +2,8 @@
 # Build:  pyinstaller --noconfirm --clean packaging/mirza2nexa.spec
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_submodules
+
 ROOT = Path(SPECPATH).parent
 STATIC = ROOT / "src" / "mirza2nexa" / "web" / "static"
 
@@ -9,7 +11,9 @@ a = Analysis(
     [str(ROOT / "packaging" / "entry.py")],
     pathex=[str(ROOT / "src")],
     datas=[(str(STATIC), "mirza2nexa/web/static")],
-    hiddenimports=[
+    # Every mirza2nexa submodule, explicitly: converter modules register themselves on import and
+    # a missing one must never be silently absent from the bundle (v0.2.0 shipped without them).
+    hiddenimports=collect_submodules("mirza2nexa") + [
         "uvicorn.logging", "uvicorn.loops.auto", "uvicorn.loops.asyncio",
         "uvicorn.protocols.http.auto", "uvicorn.protocols.http.h11_impl",
         "uvicorn.lifespan.on", "uvicorn.lifespan.off",
