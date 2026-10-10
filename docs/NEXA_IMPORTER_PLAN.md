@@ -1,5 +1,10 @@
 # NEXA-side importer for `.nxpkg`: design for the next phase
 
+> **Superseded in detail by [`NEXA_IMPORTER_DESIGN.md`](NEXA_IMPORTER_DESIGN.md)** (Phase 3: validation gates,
+> dry-run report, existing-customer balance policy, ownership consumption, run ledger/resume/rollback,
+> reconciliation, permissions, DDL). This plan is kept for background, §5 (retiring the temporary Mirza UI)
+> and §8.1 (history destinations). Where the two differ, the design document wins.
+
 > **Status:** this is a proposal only. Nothing in `Mhoseinshah1/nexa-bot` has been changed. The owner
 > must approve each step below before any NEXA code is written. Until that importer exists and passes
 > the acceptance tests in §6, no `.nxpkg` may be described as "importable in production". This is why

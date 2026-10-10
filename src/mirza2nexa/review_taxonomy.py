@@ -111,6 +111,7 @@ CODES: dict[str, tuple[str, str]] = {
     "TABLE_NEEDS_DECISION": ("settings_decision", OWNER_DECISION),
     "CONFIG_NO_STORABLE_COLUMN": ("settings_decision", RESOLVABLE_BY_CODE),
     "SETTING_MULTIPLE_ROWS": ("settings_decision", ARCHIVE_ONLY),
+    "CONFIG_UNVERIFIED_TABLE_EXCLUDED": ("settings_decision", OWNER_DECISION),
     # agents / engagement / support
     "AGENT_NOT_CUSTOMER": ("agents_pricing", ARCHIVE_ONLY),
     "AGENT_MULTIPLE_PRICE_LEVELS": ("agents_pricing", OWNER_DECISION),

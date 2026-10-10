@@ -35,7 +35,8 @@ EXPECTED_MODULES: frozenset[str] = frozenset({
 #: Kept here, in code, so a frozen build can verify itself without any data file.
 EXPECTED_TABLES: frozenset[str] = frozenset({
     "Discount", "DiscountSell", "Giftcodeconsumed", "PaySetting", "Payment_report", "Requestagent", "ad_campaign",
-    "admin", "affiliates", "agent_invoice", "agent_log", "agent_manage", "agent_usage_snapshot", "app", "botsaz",
+    "admin", "affiliates", "agent_invoice", "agent_log", "agent_manage", "agent_usage_snapshot", "ai_business_chat",
+    "app", "botsaz", "botsaz_help", "global_hidden_gateways",
     "cancel_service", "card_number", "category", "channels", "custom_service_tier_prices", "departman",
     "discount_sell", "discount_sell_used", "help", "help_category", "invoice", "logs_api", "manualsell",
     "marzban_panel", "product", "protocol", "reagent_report", "requestagent", "service_other", "setting",

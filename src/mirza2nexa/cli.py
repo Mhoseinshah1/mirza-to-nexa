@@ -4,6 +4,7 @@
     mirza2nexa verify PACKAGE.nxpkg --key-file KEY.nxkey | --ask-passphrase
     mirza2nexa compare OLD.nxpkg NEW.nxpkg --old-key-file A --new-key-file B
     mirza2nexa synth OUT.zip [--users N] [--password-env VAR]
+    mirza2nexa schema BACKUP.zip -o schema.json [--ask-password | --password-env VAR]
 
 Secrets are read interactively (``getpass``) or from an environment variable named on the
 command line — never from argv itself, which other local users/processes can see.
@@ -166,6 +167,26 @@ def cmd_synth(a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_schema(a: argparse.Namespace) -> int:
+    """Write table/column structure + row counts (no values, no defaults) to a local JSON file."""
+    from .schema_export import NOTICE_FA, export_schema
+
+    try:
+        doc = export_schema(Path(a.backup), Path(a.output),
+                            password=_secret(a.ask_password, a.password_env, "ZIP password: "),
+                            workdir=Path(a.workdir) if a.workdir else None,
+                            stage=lambda name: print(f"[stage] {name}", file=sys.stderr))
+    except MigrationError as e:
+        print(f"error [{e.code}]: {e.message_fa}", file=sys.stderr)
+        return 1
+    s = doc["summary"]
+    print(f"schema:   {Path(a.output)}")
+    print(f"tables: {s['tables']}  catalogued: {s['catalogued']}  "
+          f"uncatalogued (non-empty, would block): {s['uncatalogued_blocking']}")
+    print(NOTICE_FA)
+    return 0
+
+
 def cmd_selfcheck(_a: argparse.Namespace) -> int:
     """Print the module/catalogue registry state; exit 3 when anything is missing (frozen-build check)."""
     from . import __version__
@@ -217,6 +238,14 @@ def main(argv: list[str]) -> int:
     s.add_argument("--shift-balances", type=int, default=0)
     s.add_argument("--password-env")
     s.set_defaults(fn=cmd_synth)
+
+    sm = sub.add_parser("schema", help="export table/column structure and row counts (no data) to JSON")
+    sm.add_argument("backup")
+    sm.add_argument("-o", "--output", required=True)
+    sm.add_argument("--ask-password", action="store_true")
+    sm.add_argument("--password-env")
+    sm.add_argument("--workdir")
+    sm.set_defaults(fn=cmd_schema)
 
     sc = sub.add_parser("selfcheck", help="verify every converter module and table spec is present")
     sc.set_defaults(fn=cmd_selfcheck)

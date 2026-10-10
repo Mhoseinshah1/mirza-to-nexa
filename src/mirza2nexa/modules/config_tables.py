@@ -18,11 +18,21 @@ Decisions (full table with citations: ``docs/DATA_PROTECTION.md``):
   Rows become ``legacy_configuration_row`` records in ``records/configuration/<table>.jsonl``;
   every value goes through :func:`~mirza2nexa.sensitivity.redact_text`. NEXA uses them as
   reference for the operator only: nothing is applied to live configuration.
-* **REVIEW** — ``help_category`` (no public DDL): fails closed, nothing staged, rows counted and a
-  ``CONFIG_NO_STORABLE_COLUMN`` review item asks for the column list.
+* **REVIEW (generic)** — ``help_category`` and ``botsaz_help`` (no public DDL): columns come from
+  the runtime DDL; columns whose *names* look like credentials are dropped at parse time, the rest
+  is archived (free text redacted) as ``legacy_archive_row`` in ``records/archive/<table>.jsonl``
+  with a ``TABLE_NEEDS_DECISION`` review item. Nothing is applied to NEXA.
 * **EXCLUDED** — ``card_number`` (payout cards), ``logs_api`` (request log with headers/bodies),
-  ``admin`` (web-panel logins + password hashes), ``botsaz`` (sub-bot tokens, webhook secrets) and
-  ``topicid`` (bound to the old report group). Nothing is staged; coverage counts the rows.
+  ``admin`` (web-panel logins + password hashes), ``botsaz`` (sub-bot tokens, webhook secrets),
+  ``topicid`` (bound to the old report group), ``global_hidden_gateways`` (payment-gateway visibility,
+  presumed secret-bearing) and ``ai_business_chat`` (AI chat transcripts, presumed personal and
+  possibly carrying AI-provider keys). Nothing is staged; coverage counts the rows. The two
+  evidence-less EXCLUDED tables additionally raise a ``CONFIG_UNVERIFIED_TABLE_EXCLUDED`` review item
+  when they are *not* empty, so the owner knows rows were left behind.
+
+Uncatalogued tables (policy, enforced in ``convert.py``): an uncatalogued table that is **empty** is
+reported with status ``empty`` and does not block; a **non-empty** uncatalogued table blocks the
+package (``UNCLASSIFIED_TABLE``) until it has a catalogue entry with evidence.
 
 Column sensitivities follow ``docs/evidence/mirza_tables.json`` (Source DB agent) and are never
 weaker than it.
@@ -140,7 +150,13 @@ KV_TABLES: dict[str, tuple[str, str, frozenset[str], frozenset[str]]] = {
 }
 
 # Flags written on every record of a REVIEW table (all False: nothing is applied).
-REVIEW_FLAGS: dict[str, dict[str, bool]] = {"help_category": {"activates_role": False}}
+REVIEW_FLAGS: dict[str, dict[str, bool]] = {"help_category": {"activates_role": False},
+                                             "botsaz_help": {"activates_role": False}}
+
+#: EXCLUDED tables whose classification rests on the table *name* only (no DDL, no code in any
+#: source). Non-empty instances get a review item so excluding them is an explicit owner decision.
+UNVERIFIED_EXCLUDED: frozenset[str] = frozenset({"global_hidden_gateways", "ai_business_chat"})
+OPREP = "operator-report 2026-10 (present but empty in the real backup; no DDL, no code in any source)"
 
 
 def _spec(name: str, klass: str, purpose: str, purpose_fa: str, reason: str, nexa_target: str,
@@ -222,11 +238,48 @@ SPECS: tuple[TableSpec, ...] = (
           "operator reference", (f"{BMP} keyboard.php:336-350",), (_c("NameProtocol"),),
           open_questions=("No CREATE TABLE in the public sources; only NameProtocol is read.",)),
     _spec("help_category", REVIEW, "Help categories (deployed fork only; no public DDL)", "دسته‌بندی راهنما",
-          "Reported by the operator but absent from both public sources: fails closed — no column is staged "
-          "(empty column allow-list) and rows are only counted until the column list and semantics are supplied.",
-          "UNKNOWN until columns are known", (f"{EVJ}#help_category",),
-          (), open_questions=("Supply the CREATE TABLE header (no values) to classify its columns.",
-                              "Does it hold secrets or money?")),
+          "Reported by the operator (3 rows in the real backup) but absent from both public sources. Generic "
+          "spec: columns come from the runtime DDL, credential-like column names are dropped at parse time, "
+          "the rest is archived for review (free text redacted). Nothing is applied: the owner decides whether "
+          "NEXA help pages are re-created from it.",
+          "archive only (legacy_archive_row); NEXA help pages re-created by hand",
+          (f"{EVJ}#help_category", "operator-report 2026-10 (3 rows in the real backup)"),
+          None, open_questions=("Supply the CREATE TABLE header (no values) to classify its columns.",
+                                "Does it hold secrets or money?")),
+    _spec("botsaz_help", REVIEW, "Help texts of reseller sub-bots (deployed fork only; no DDL, no code)",
+          "متن‌های راهنمای ربات‌های نمایندگان",
+          "Present but empty in the real backup; no public source declares or reads it. The name suggests "
+          "per-sub-bot help texts (sibling of botsaz, which is EXCLUDED for its tokens) but that is UNPROVEN, so "
+          "it is not CONFIGURATION: generic spec, credential-like column names dropped, remaining columns "
+          "archived with a review item. Free text is redacted (help texts often embed card numbers/links).",
+          "archive only (legacy_archive_row); NEXA has no reseller sub-bots",
+          (f"{EVJ}#botsaz_help", OPREP),
+          None, sensitivity=PERSONAL,
+          open_questions=("Supply the CREATE TABLE header (no values) to classify its columns.",
+                          "Is it keyed by agent (botsaz.id_user) and does it hold card/payout text?")),
+    _spec("global_hidden_gateways", EXCLUDED, "Payment gateways hidden globally (deployed fork only; no DDL)",
+          "درگاه‌های پرداخت پنهان‌شده",
+          "Present but empty in the real backup; no public source declares or reads it. By name it is payment "
+          "gateway visibility configuration; PaySetting shows that Mirza stores gateway credentials next to "
+          "gateway switches, so it is presumed secret-bearing and EXCLUDED: nothing staged, rows counted, and a "
+          "non-empty instance raises CONFIG_UNVERIFIED_TABLE_EXCLUDED. NEXA gateways are configured fresh.",
+          "none (NEXA payment gateways configured by hand)",
+          (f"{EVJ}#global_hidden_gateways", OPREP, f"{PRO} db/tables/PaySetting.php:7-110"),
+          None, sensitivity=SECRET,
+          open_questions=("Supply the CREATE TABLE header (no values) if the table is ever non-empty.",)),
+    _spec("ai_business_chat", EXCLUDED, "AI assistant chat log (deployed fork only; no DDL)",
+          "گفتگوهای دستیار هوش مصنوعی",
+          "Present but empty in the real backup; no public source declares or reads it. By name it holds "
+          "conversation transcripts between customers and an AI assistant: personal free text with no NEXA "
+          "target, and AI integrations commonly keep provider API keys / prompts beside the log. Redaction "
+          "cannot prove free-form chat clean, and REVIEW would copy personal transcripts into the package for no "
+          "migration use, so it is EXCLUDED: nothing staged, rows counted, and a non-empty instance raises "
+          "CONFIG_UNVERIFIED_TABLE_EXCLUDED for an explicit owner decision.",
+          "none (no NEXA equivalent)",
+          (f"{EVJ}#ai_business_chat", OPREP),
+          None, sensitivity=SECRET,
+          open_questions=("Supply the CREATE TABLE header (no values) if the table is ever non-empty.",
+                          "Does NEXA need any AI chat history? (default: no)")),
     _spec("admin", EXCLUDED, "Bot/web-panel administrators and their role", "مدیران ربات و نقش آن‌ها",
           "Holds web-panel login names and password hashes; admins are re-created in NEXA by hand (own RBAC + "
           "2FA). Role enforcement in Mirza is NOT_TESTED. Nothing is staged; rows are counted.",
@@ -372,6 +425,11 @@ def run(ctx: ModuleContext) -> None:
         if spec.klass == EXCLUDED:
             ctx.coverage(stats.name, status="excluded")
             ctx.count("configuration", "skipped", stats.rows)
+            if spec.name in UNVERIFIED_EXCLUDED and stats.rows:
+                ctx.review(kind="table", code="CONFIG_UNVERIFIED_TABLE_EXCLUDED", entity="configuration",
+                           table=stats.name, pk=None, severity="warning", data={"rows": stats.rows},
+                           message="این جدول بدون مستند و فقط بر اساس نام کنار گذاشته شد اما ردیف دارد؛ "
+                                   "حذف آن باید با تصمیم صریح مالک تأیید شود.")
             continue
         if not stats.sql_name:  # no documented, storable column: rows are only counted
             if stats.rows:
@@ -468,7 +526,7 @@ _DDL = {
     "app": ("CREATE TABLE `app` (\n  `id` int(6) unsigned NOT NULL AUTO_INCREMENT,\n  `name` varchar(200) NOT NULL,\n"
             "  `link` varchar(200) NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB;\n"),
     "protocol": "CREATE TABLE `protocol` (\n  `NameProtocol` varchar(200) NOT NULL\n) ENGINE=InnoDB;\n",
-    # FABRICATED shape (no public DDL exists): exercises the fail-closed path for help_category.
+    # FABRICATED shape (no public DDL exists): exercises the generic secret-name filter for help_category.
     "help_category": ("CREATE TABLE `help_category` (\n  `id` int(6) unsigned NOT NULL AUTO_INCREMENT,\n"
                       "  `name` varchar(200) NOT NULL,\n  `token` varchar(200) DEFAULT NULL,\n  PRIMARY KEY (`id`)\n"
                       ") ENGINE=InnoDB;\n"),

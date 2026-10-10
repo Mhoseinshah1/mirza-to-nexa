@@ -5821,5 +5821,94 @@
    "Does it hold secrets or money?",
    "Compare with Requestagent."
   ]
+ },
+ {
+  "table": "ai_business_chat",
+  "aliases": [],
+  "found_in": [
+   "operator-report 2026-10 (empty in real backup)"
+  ],
+  "public_ddl": false,
+  "rows_operator_report": 0,
+  "columns": [],
+  "primary_key": "UNKNOWN",
+  "unique_keys": [],
+  "purpose": "UNKNOWN — no public source declares or references this table. Name suggests transcripts of customer chats with an AI business assistant (UNPROVEN).",
+  "written_by": [
+   "UNKNOWN (not in any public source)"
+  ],
+  "relations": [],
+  "vocabularies": {},
+  "time_columns": {},
+  "money_columns": {},
+  "recommended_class": "EXCLUDED",
+  "class_reason": "Presumed personal free text with no NEXA target; AI integrations commonly store provider API keys/prompts beside the log. Excluded (counted only); a non-empty instance raises CONFIG_UNVERIFIED_TABLE_EXCLUDED for an owner decision.",
+  "nexa_inventory_class_proposal": "EXCLUDED",
+  "nexa_inventory_note": "present but empty in the real backup; classification rests on the name only",
+  "nexa_target": "none",
+  "open_questions": [
+   "Supply column names (CREATE TABLE header; no values) if the table is ever non-empty.",
+   "Does NEXA need any AI chat history? (default: no)"
+  ],
+  "evidence_search": "Searched botmirzapanel@92c0ed0, mirza_pro@b645db7 (all files) and nexa-bot@9e604de (all files) for the table name: no match."
+ },
+ {
+  "table": "botsaz_help",
+  "aliases": [],
+  "found_in": [
+   "operator-report 2026-10 (empty in real backup)"
+  ],
+  "public_ddl": false,
+  "rows_operator_report": 0,
+  "columns": [],
+  "primary_key": "UNKNOWN",
+  "unique_keys": [],
+  "purpose": "UNKNOWN — no public source declares or references this table. Name suggests help texts of reseller sub-bots (sibling of botsaz; UNPROVEN).",
+  "written_by": [
+   "UNKNOWN (not in any public source)"
+  ],
+  "relations": [],
+  "vocabularies": {},
+  "time_columns": {},
+  "money_columns": {},
+  "recommended_class": "REVIEW",
+  "class_reason": "Meaning unproven, so not CONFIGURATION: generic spec, credential-like column names dropped at parse time, remaining columns archived (free text redacted) with a TABLE_NEEDS_DECISION review item.",
+  "nexa_inventory_class_proposal": "REVIEW",
+  "nexa_inventory_note": "present but empty in the real backup",
+  "nexa_target": "archive only; NEXA has no reseller sub-bots",
+  "open_questions": [
+   "Supply column names (CREATE TABLE header; no values).",
+   "Is it keyed by agent and does it hold card/payout text?"
+  ],
+  "evidence_search": "Searched botmirzapanel@92c0ed0, mirza_pro@b645db7 (all files) and nexa-bot@9e604de (all files) for the table name: no match."
+ },
+ {
+  "table": "global_hidden_gateways",
+  "aliases": [],
+  "found_in": [
+   "operator-report 2026-10 (empty in real backup)"
+  ],
+  "public_ddl": false,
+  "rows_operator_report": 0,
+  "columns": [],
+  "primary_key": "UNKNOWN",
+  "unique_keys": [],
+  "purpose": "UNKNOWN — no public source declares or references this table. Name suggests globally hidden payment gateways (visibility configuration; UNPROVEN).",
+  "written_by": [
+   "UNKNOWN (not in any public source)"
+  ],
+  "relations": [],
+  "vocabularies": {},
+  "time_columns": {},
+  "money_columns": {},
+  "recommended_class": "EXCLUDED",
+  "class_reason": "Payment-gateway configuration is secret-bearing in Mirza (PaySetting stores credentials beside switches, mirza_pro@b645db7 db/tables/PaySetting.php:7-110); presumed secret, excluded (counted only); a non-empty instance raises CONFIG_UNVERIFIED_TABLE_EXCLUDED.",
+  "nexa_inventory_class_proposal": "EXCLUDED",
+  "nexa_inventory_note": "present but empty in the real backup; classification rests on the name only",
+  "nexa_target": "none (NEXA gateways configured by hand)",
+  "open_questions": [
+   "Supply column names (CREATE TABLE header; no values) if the table is ever non-empty."
+  ],
+  "evidence_search": "Searched botmirzapanel@92c0ed0, mirza_pro@b645db7 (all files) and nexa-bot@9e604de (all files) for the table name: no match."
  }
 ]

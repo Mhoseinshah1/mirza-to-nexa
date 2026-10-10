@@ -105,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     failed = _registry_load_error(argv)
     if failed is not None:
         return failed
-    if argv and argv[0] in {"convert", "verify", "compare", "synth", "selfcheck"}:
+    if argv and argv[0] in {"convert", "verify", "compare", "synth", "selfcheck", "schema"}:
         from .cli import main as cli_main
 
         return cli_main(argv)

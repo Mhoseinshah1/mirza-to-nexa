@@ -1,4 +1,4 @@
-# `.nxpkg` content contract: package schema `nexa.migration.mirza` 1.1.0
+# `.nxpkg` content contract: package schema `nexa.migration.mirza` 1.2.0
 
 The container format, meaning the encryption, chunking and checksums, is described in `NXPKG_FORMAT.md` and has
 not changed. This document covers the **content**: which files and records a package holds, and what an
@@ -10,6 +10,7 @@ importer may and may not do with each of them.
 |---|---|---|
 | 1.0.0 | Phase 1: customers, opening balances, debts, products, categories, invoices, services, panels, review queue | — |
 | 1.1.0 | Phase 2, additions only: archive and history files, configuration files, `reports/coverage.json`, a `schema` field on every record | A 1.0 reader that ignores unknown files and fields keeps working |
+| 1.2.0 | Phase 3, additions only: service ownership, wallet difference analysis, panel/product mapping inputs, agent state, migration readiness and review taxonomy reports (marked *added in 1.2.0* below); three more catalogued fork tables (`botsaz_help` → `records/archive/`, `global_hidden_gateways` and `ai_business_chat` EXCLUDED); `help_category` rows now archived (secret-named columns dropped) | A 1.1 reader that ignores unknown files and fields keeps working. An importer that *consumes* 1.2 files must check `package_schema_version >= 1.2.0` and treat their absence in older packages as "not available", never as "empty" |
 
 The rules:
 * A **minor** bump only adds files or fields.
@@ -60,6 +61,18 @@ Many records also carry live-state flags, each fixed to `false` where it applies
 | `records/panels.jsonl`, `records/panel_registry.jsonl` | `legacy_panel_code`, `legacy_panel` |
 | `records/agents/profiles.jsonl`, `tier_prices.jsonl` | `legacy_agent_profile`, `legacy_agent_price_level` |
 
+### Phase-3 decision inputs (*added in 1.2.0*; nothing is applied automatically)
+| File | `record_type` | Consumer rule (`NEXA_IMPORTER_DESIGN.md`) |
+|---|---|---|
+| `records/service_ownership.jsonl` | `legacy_service_ownership` | only `CONFIRMED_*` states may enter P6 adoption (after NEXA re-decision, panel map and per-service approval); `AMBIGUOUS_*` / manual-review / unknown states → quarantine (§8) |
+| `records/wallet_difference_analysis.jsonl` | `legacy_wallet_difference` | read-only evidence beside the balance snapshot; used for owner decisions on existing customers (§6); never applied to balances |
+| `records/panel_mapping_template.jsonl` | `legacy_panel_mapping_template` | input to the owner's panel mapping form; holds no credentials (§7) |
+| `records/product_mapping_proposal.jsonl` | `legacy_product_mapping_proposal` | → `legacy_product_reviews` `PENDING_REVIEW`; no product is created (§9) |
+| `records/agents/state.jsonl` | `legacy_agent_state` | owner-decision summary per agent; `role_active` is always `false` (§9) |
+
+`record_type` names of the template/proposal files follow the producing module; an importer resolves them from
+the record itself and refuses unknown values (gate G5).
+
 ### Read-only history archives
 | File | `record_type` | Notes |
 |---|---|---|
@@ -84,6 +97,17 @@ Many records also carry live-state flags, each fixed to `false` where it applies
 | `reports/mapping.json` | The mapping version, the entity mapping and the schema profile |
 | `reports/review-queue.jsonl` | `{kind, severity, code, message (fa), entity, source_ref, data}`. Never holds secrets or message text. |
 | `reports/diff.json` | Only present when the package was compared with a previous backup |
+| `reports/migration-readiness.json` | *added in 1.2.0.* Aggregate readiness summary for the owner (counts, sums, codes, table names; no personal data) |
+| `reports/review-taxonomy.json` | *added in 1.2.0.* Every review code with its domain and resolution kind (e.g. resolvable by code, needs owner decision, adoption-time); drives quarantine routing |
+
+### Catalogue policy for tables (unchanged in 1.2.0, stated for importers)
+* Every table in the dump appears in `reports/coverage.json`.
+* An **uncatalogued** table that is **empty** is reported with status `empty` and does not block.
+* An **uncatalogued** table that is **non-empty** blocks the package (`UNCLASSIFIED_TABLE`).
+* A catalogued `EXCLUDED` table is counted only (`excluded`); evidence-less excluded tables
+  (`global_hidden_gateways`, `ai_business_chat`) add a `CONFIG_UNVERIFIED_TABLE_EXCLUDED` review item when non-empty.
+* `mirza2nexa schema BACKUP.zip -o schema.json` exports table/column structure and row counts (no values, no
+  defaults) so a fork's tables can be catalogued without sharing the backup.
 
 ## Manifest additions (1.1.0)
 
@@ -94,5 +118,8 @@ These fields are added on top of the 1.0.0 manifest:
 * `record_counts`
 * `compatibility.verified_by_importer: false`
 
-`verified_by_importer` stays `false` until the NEXA importer described in `NEXA_IMPORTER_PLAN.md` exists and has
-passed its acceptance tests.
+`verified_by_importer` stays `false` until the NEXA importer described in `NEXA_IMPORTER_DESIGN.md` (background:
+`NEXA_IMPORTER_PLAN.md`) exists and has passed its acceptance tests.
+
+The manifest's `package_schema_version` is set by the converter (`nxpkg/manifest.py`); this document describes
+content contract 1.2.0.
