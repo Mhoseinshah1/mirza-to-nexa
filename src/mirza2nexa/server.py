@@ -33,6 +33,8 @@ from . import __version__, ownership_api, readiness_html, report_fa
 from .archive import inspect_archive, verify_password
 from .errors import MigrationError
 from .jobs import Job, JobManager, clear_history, read_history
+from .panel_targets import NEXA_TARGET_PROVIDERS
+from .panel_targets import parse_targets as parse_panel_targets
 from .settings import Settings
 
 STATIC_DIR = Path(__file__).parent / "web" / "static"
@@ -299,6 +301,10 @@ def create_app(manager: JobManager, *, port: int, launch_token: str) -> FastAPI:
             "money_unit": body.get("money_unit") or None,
             "previous_job_id": body.get("previous_job_id") or None,
         }
+        try:
+            options["panel_targets"] = parse_panel_targets(body.get("panel_targets"))
+        except MigrationError as exc:
+            return _mig(exc)
         if options["package_secret_mode"] == "passphrase":  # noqa: S105 - mode name, not a secret
             pp = options["package_passphrase"]
             if not isinstance(pp, str) or len(pp) < 12:
@@ -528,6 +534,40 @@ def create_app(manager: JobManager, *, port: int, launch_token: str) -> FastAPI:
             "Content-Disposition": f'attachment; filename="migration-readiness-{job.id}.html"',
             "Content-Security-Policy": REPORT_HTML_CSP,
         })
+
+    # ---- NEXA target panels (panel_targets.py) -----------------------------------------
+    @app.get("/api/panel-targets/providers")
+    async def panel_target_providers() -> dict[str, Any]:
+        return {"providers": [{"provider_type": k, "display_name": v["display_name"], "evidence": v["evidence"]}
+                              for k, v in NEXA_TARGET_PROVIDERS.items()]}
+
+    @app.get("/api/jobs/{job_id}/panels")
+    async def job_panels(job_id: str) -> Response:
+        """Legacy panel codes of a completed conversion (no URLs, no credentials) + any selected target."""
+        job = job_or_404(job_id)
+        if isinstance(job, JSONResponse):
+            return job
+        recs = job.workspace / "stage" / "records"
+        if job.status != "completed" or not (recs / "panel_mapping_template.jsonl").is_file():
+            return _err(404, "report.not_ready", "فهرست پنل‌ها هنوز آماده نیست.")
+        targets = {}
+        tp = recs / "panel_target_mapping.jsonl"
+        if tp.is_file():
+            for line in tp.read_text(encoding="utf-8").splitlines():
+                r = json.loads(line)
+                targets[r["code_panel"]] = r.get("target")
+        items = []
+        for line in (recs / "panel_mapping_template.jsonl").read_text(encoding="utf-8").splitlines():
+            r = json.loads(line)
+            code = r.get("code_panel")
+            if not isinstance(code, str) or any(i["code_panel"] == code for i in items):
+                continue
+            items.append({"code_panel": code, "name_panel": r.get("name_panel"),
+                          "source_panel_type": (r.get("panel_type") or {}).get("normalized"),
+                          "identity_kind": r.get("identity_kind"),
+                          "invoices": r.get("invoices_by_code_panel") or {},
+                          "target": targets.get(code)})
+        return JSONResponse({"items": items})
 
     # ---- bulk ownership review (docs/OWNERSHIP_REVIEW.md) ------------------------------
     review_sessions = ownership_api.Sessions()

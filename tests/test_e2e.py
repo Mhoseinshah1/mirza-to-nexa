@@ -567,3 +567,58 @@ def test_bulk_ownership_review_approve_and_undo(ui, server, tmp_path):
         f"() => document.querySelector('[data-testid=own-card-ADMIN_APPROVED_UNVERIFIED] .stat-value')?.dataset.value === '{attested0 + m}'")
     assert _card(page, "PROVEN") == proven0
     probs.assert_clean()
+
+
+def test_nexa_panel_target_selection(ui, server, tmp_path):
+    """«پنل مقصد در NEXA»: the operator marks legacy panel ``syn-a`` as RickPanel; only that code gets a
+    target, every other code stays unmapped; an invalid UUID is refused before anything starts."""
+    uuid = "3f2c8a1e-6b7d-4c9a-8e21-0a9b8c7d6e5f"
+    zp, _ = make_backup(tmp_path, users=120, name="targets.zip")
+    page, probs = ui
+    open_app(page, server)
+    upload(page, zp)
+    start(page, password=None, money_unit="toman")
+    assert wait_terminal(page) == "completed"
+
+    upload(page, zp)
+    assert PERSIAN.search(page.text_content("[data-testid=panel-targets]") or "")
+    # codes of the earlier completed conversion are offered in the datalist
+    page.wait_for_selector("#pt-codes option[value=syn-a]", state="attached")
+    page.click("[data-testid=pt-add]")
+    row = page.locator("[data-testid=pt-row]").first
+    row.locator("[data-testid=pt-code]").fill("syn-a")
+    prov = row.locator("[data-testid=pt-provider]")
+    assert prov.locator("option").all_text_contents() == ["RickPanel"]
+    prov.select_option("rickpanel")
+    assert row.locator("[data-testid=pt-version]").input_value() == "1.0.0"
+
+    # invalid (upper-case) UUID: Persian error, the job is not started
+    row.locator("[data-testid=pt-uuid]").fill(uuid.upper())
+    page.select_option("[data-testid=money-unit]", "toman")
+    page.click("[data-testid=start-btn]")
+    err = page.wait_for_selector("[data-testid=panel-targets-error]:not([hidden])")
+    assert PERSIAN.search(err.text_content() or "")
+    assert row.locator("[data-testid=pt-uuid]").get_attribute("aria-invalid") == "true"
+    assert page.is_visible("[data-testid=start-btn]")
+    assert page.evaluate("async () => (await (await fetch('/api/jobs')).json()).items[0].status") == "uploaded"
+
+    row.locator("[data-testid=pt-uuid]").fill(uuid)
+    page.click("[data-testid=start-btn]")
+    assert wait_terminal(page) == "completed"
+
+    items = page.evaluate("""async () => {
+        const jobs = (await (await fetch('/api/jobs')).json()).items;
+        return (await (await fetch('/api/jobs/' + jobs[0].id + '/panels')).json()).items;
+    }""")
+    targets = {i["code_panel"]: i["target"] for i in items}
+    assert "syn-a" in targets and len(targets) > 1, targets
+    assert targets["syn-a"]["provider_type"] == "rickpanel"
+    assert targets["syn-a"]["nexa_panel_id"] == uuid
+    assert targets["syn-a"]["provider_version_declared"] == "1.0.0"
+    assert all(t is None for c, t in targets.items() if c != "syn-a"), targets
+
+    page.click("[data-testid=nav-readiness]")
+    box = page.wait_for_selector("[data-testid=readiness-panel-targets-providers]")
+    assert "RickPanel" in (box.text_content() or "")
+    assert page.locator("[data-testid=readiness-panel-targets-providers] tr[data-key=rickpanel]").count() == 1
+    probs.assert_clean()

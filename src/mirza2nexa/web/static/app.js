@@ -276,6 +276,8 @@
     dashTimer: null,
     lastAnnounce: '',
     fatal: false,
+    // NEXA target panels in the start form (panel_targets.py); never holds credentials
+    pt: { jobId: null, seq: 0, providers: null, codesFrom: null, codes: [] },
   };
 
   // ------------------------------------------------------------------ API
@@ -846,6 +848,145 @@
       sel.append(el('option', { value: pj.id, text: pj.filename + ' — ' + fmtDate(pj.created_at) }));
     }
     sel.value = keep && [...sel.options].some((o) => o.value === keep) ? keep : '';
+    if (S.pt.jobId !== j.id) {
+      S.pt.jobId = j.id;
+      clear($('pt-rows'));
+      clear($('pt-codes'));
+      S.pt.codesFrom = null;
+      S.pt.codes = [];
+    }
+    loadPanelTargetSources(j.id);
+  }
+
+  // ------------------------------------------------------------------ NEXA target panels
+  // Only the NEXA target *type* of the selected legacy panel codes is recorded; source facts
+  // (customer, service, volume, expiry, legacy ids) are never changed and no panel is contacted.
+  const PT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  const PT_VERSION = /^[0-9]{1,4}(?:\.[0-9]{1,4}){0,3}$/;
+  const PT_CODE_BAD = /[\x00-\x1f\x7f]/;
+  const providerLabel = (p) => {
+    const hit = (S.pt.providers || []).find((x) => x.provider_type === p);
+    if (hit && hit.display_name) return String(hit.display_name);
+    return p === 'rickpanel' ? 'RickPanel' : String(p);
+  };
+
+  async function loadPanelTargetSources(jobId) {
+    if (!S.pt.providers) {
+      try {
+        const r = await api('GET', '/api/panel-targets/providers');
+        S.pt.providers = objList(r && r.providers).filter((p) => typeof p.provider_type === 'string');
+        document.querySelectorAll('#pt-rows select.pt-provider').forEach(fillProviderSelect);
+      } catch (e) {
+        if (e.status !== 401) showError(e);
+      }
+    }
+    // legacy panel codes from the newest completed conversion (or the one chosen for comparison)
+    const chosen = $('previous-job').value;
+    const done = S.jobs.filter((x) => x.status === 'completed' && x.id !== jobId);
+    const src = chosen || (done[0] && done[0].id) || null;
+    const status = $('pt-codes-status');
+    if (!src) {
+      status.textContent = 'هنوز تبدیل کامل‌شده‌ای نیست؛ کد پنل را دستی وارد کنید (همان code_panel در میرزا).';
+      return;
+    }
+    if (S.pt.codesFrom === src) return;
+    try {
+      const r = await api('GET', jobPath(src, '/panels'));
+      if (S.pt.jobId !== jobId) return;
+      S.pt.codesFrom = src;
+      S.pt.codes = objList(r && r.items).filter((x) => typeof x.code_panel === 'string');
+      const dl = $('pt-codes');
+      clear(dl);
+      for (const it of S.pt.codes) {
+        const inv = obj(it.invoices);
+        const invCount = Object.keys(inv).reduce((a, k) => a + (Number(inv[k]) || 0), 0);
+        const parts = [it.name_panel ? String(it.name_panel) : null,
+          it.source_panel_type ? 'نوع در میرزا: ' + String(it.source_panel_type) : null,
+          'فاکتورها: ' + fmtNum(invCount),
+          it.target && it.target.provider_type ? 'مقصد قبلی: ' + providerLabel(it.target.provider_type) : null].filter(Boolean);
+        dl.append(el('option', { value: it.code_panel, label: parts.join(' — ') }));
+      }
+      const pj = S.jobs.find((x) => x.id === src);
+      status.textContent = fmtNum(S.pt.codes.length) + ' کد پنل از تبدیل «' + (pj ? pj.filename : src) +
+        '» برای انتخاب پیشنهاد می‌شود.';
+    } catch (e) {
+      if (S.pt.jobId !== jobId) return;
+      status.textContent = 'فهرست کدهای پنل در دسترس نیست؛ کد پنل را دستی وارد کنید.';
+      if (e.status !== 404 && e.status !== 401) showError(e);
+    }
+  }
+
+  function fillProviderSelect(sel) {
+    const keep = sel.value;
+    clear(sel);
+    const provs = S.pt.providers && S.pt.providers.length ? S.pt.providers : [{ provider_type: 'rickpanel', display_name: 'RickPanel' }];
+    for (const p of provs) sel.append(el('option', { value: p.provider_type, text: String(p.display_name || p.provider_type) }));
+    if (keep && [...sel.options].some((o) => o.value === keep)) sel.value = keep;
+  }
+
+  function addPanelTargetRow() {
+    const n = ++S.pt.seq;
+    const id = (k) => 'pt-' + k + '-' + n;
+    const provider = el('select', { id: id('provider'), class: 'pt-provider', 'data-testid': 'pt-provider' });
+    fillProviderSelect(provider);
+    const row = el('div', { class: 'pt-row', role: 'group', 'aria-label': 'پنل مقصد ' + fmtNum(n), 'data-testid': 'pt-row' },
+      el('div', { class: 'field inline' },
+        el('label', { for: id('code'), text: 'کد پنل در میرزا (code_panel)' }),
+        el('input', { type: 'text', id: id('code'), class: 'pt-code', list: 'pt-codes', dir: 'ltr', spellcheck: 'false',
+          autocomplete: 'off', autocapitalize: 'off', maxlength: '64', required: true, 'data-testid': 'pt-code' })),
+      el('div', { class: 'field inline' },
+        el('label', { for: id('provider'), text: 'نوع پنل مقصد در NEXA' }), provider),
+      el('div', { class: 'field inline' },
+        el('label', { for: id('uuid'), text: 'شناسه پنل در NEXA (اختیاری)' }),
+        el('input', { type: 'text', id: id('uuid'), class: 'pt-uuid', dir: 'ltr', spellcheck: 'false', autocomplete: 'off',
+          autocapitalize: 'off', maxlength: '36', placeholder: 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+          'aria-describedby': id('uuid-help'), 'data-testid': 'pt-uuid' }),
+        el('span', { class: 'help', id: id('uuid-help'), text: 'UUID با حروف کوچک. خالی = «ایجاد در NEXA از مسیر امن و سپس اتصال».' })),
+      el('div', { class: 'field inline' },
+        el('label', { for: id('version'), text: 'نسخه پنل' }),
+        el('input', { type: 'text', id: id('version'), class: 'pt-version', dir: 'ltr', spellcheck: 'false', autocomplete: 'off',
+          maxlength: '19', value: '1.0.0', 'data-testid': 'pt-version' })),
+      el('button', { type: 'button', class: 'btn btn-ghost btn-sm pt-remove', 'data-testid': 'pt-remove',
+        'aria-label': 'حذف پنل مقصد ' + fmtNum(n), text: 'حذف' }));
+    row.querySelector('.pt-remove').addEventListener('click', () => {
+      row.remove();
+      $('pt-add').focus();
+    });
+    $('pt-rows').append(row);
+    row.querySelector('.pt-code').focus();
+  }
+
+  /** Returns {targets} or {error: [input, message]}; nothing is guessed or normalised silently. */
+  function collectPanelTargets() {
+    const out = [];
+    const seen = new Set();
+    for (const row of document.querySelectorAll('#pt-rows .pt-row')) {
+      const ci = row.querySelector('.pt-code');
+      const pi = row.querySelector('.pt-provider');
+      const ui = row.querySelector('.pt-uuid');
+      const vi = row.querySelector('.pt-version');
+      const code = ci.value.trim();
+      const uuid = ui.value.trim();
+      const ver = vi.value.trim();
+      if (!code) return { error: [ci, 'کد پنل را وارد کنید یا این ردیف را حذف کنید.'] };
+      if (PT_CODE_BAD.test(code) || [...code].length > 64) return { error: [ci, 'کد پنل نامعتبر است (بدون نویسه کنترلی، حداکثر ۶۴ نویسه).'] };
+      if (seen.has(code)) return { error: [ci, 'برای هر کد پنل فقط یک مقصد مجاز است.'] };
+      seen.add(code);
+      if (!pi.value) return { error: [pi, 'نوع پنل مقصد را انتخاب کنید.'] };
+      if (uuid && !PT_UUID.test(uuid)) return { error: [ui, 'شناسه پنل NEXA باید UUID با حروف کوچک باشد (مثلاً 3f2c8a1e-6b7d-4c9a-8e21-0a9b8c7d6e5f).'] };
+      if (ver && !PT_VERSION.test(ver)) return { error: [vi, 'نسخه پنل نامعتبر است (مثلاً 1.0.0).'] };
+      out.push({ code_panel: code, provider_type: pi.value, nexa_panel_id: uuid || null, provider_version: ver || null });
+    }
+    return { targets: out };
+  }
+
+  function panelTargetError(input, msg, code) {
+    if (input) input.setAttribute('aria-invalid', 'true');
+    const box = $('panel-targets-error');
+    clear(box);
+    box.append(msg);
+    if (code) box.append(' ', el('span', { class: 'error-code', text: code }));
+    box.hidden = false;
   }
 
   function fieldError(inputId, msg, code) {
@@ -912,6 +1053,11 @@
         ok = false;
       }
     }
+    const pt = collectPanelTargets();
+    if (pt.error) {
+      panelTargetError(pt.error[0], pt.error[1]);
+      ok = false;
+    }
     if (!ok) {
       const first = form.querySelector('[aria-invalid="true"]');
       if (first) first.focus();
@@ -924,6 +1070,7 @@
       package_passphrase: mode === 'passphrase' ? $('pkg-pass').value : null,
       previous_job_id: $('previous-job').value || null,
     };
+    if (pt.targets.length) body.panel_targets = pt.targets;
     // Secrets leave the DOM immediately; the user retypes them on retry.
     wipeSecretInputs();
     const btn = $('start-btn');
@@ -943,6 +1090,9 @@
       } else if (e.code === 'package.passphrase_weak') {
         fieldError('pkg-pass', e.message, e.code);
         $('pkg-pass').focus();
+      } else if (e.code === 'panel_target.invalid') {
+        panelTargetError(null, e.message, e.code);
+        $('panel-targets-error').scrollIntoView({ block: 'nearest' });
       } else if (e.status !== 401) {
         showError(e);
       }
@@ -1692,6 +1842,21 @@
       ...['registry_rows', 'codes_in_invoices', 'mapped', 'pending_mapping'].map((k) => [k, numOrUndef(pn[k])]),
       ['status', pn.status === undefined ? undefined : labelWithCode(codeLabel(L.panel_status, pn.status), pn.status)],
     ]);
+    const ptBox = $('readiness-panel-targets');
+    clear(ptBox);
+    const tg = obj(pn.targets);
+    ptBox.append(el('h3', { text: rkLabel('targets') }));
+    if (!Object.keys(tg).length) {
+      ptBox.append(el('p', { class: 'muted small', text: 'برای هیچ پنلی نوع مقصد در NEXA انتخاب نشده است.' }));
+    } else {
+      const dl = el('dl', { class: 'kv-grid', 'data-testid': 'readiness-panel-targets-kv' });
+      rkGrid(dl, ['panels', 'selected', 'connect_existing', 'create_in_nexa_then_connect', 'unmapped', 'unknown_codes']
+        .map((k) => [k, numOrUndef(tg[k]), k === 'unknown_codes' && Number(tg[k]) > 0 ? 'bad-text' : '']));
+      ptBox.append(dl);
+      const bp = countTable(tg.by_provider, providerLabel, rkLabel('by_provider'), 'readiness-panel-targets-providers');
+      if (bp) ptBox.append(bp);
+    }
+    ptBox.append(el('p', { class: 'muted small', text: 'فقط نوع مقصد پنل‌های انتخاب‌شده ثبت می‌شود؛ مشتری، سرویس، حجم، انقضا و شناسه‌های قدیمی تغییر نمی‌کنند و هیچ سرویسی دوباره ساخته نمی‌شود.' }));
 
     // review
     const rv = Object.assign({}, obj(r.review));
@@ -3303,6 +3468,8 @@
     });
     $('discard-upload').addEventListener('click', discardUpload);
     $('step-3').addEventListener('submit', submitStart);
+    $('pt-add').addEventListener('click', addPanelTargetRow);
+    $('previous-job').addEventListener('change', () => { if (S.pt.jobId) loadPanelTargetSources(S.pt.jobId); });
     document.querySelectorAll('input[name="secret-mode"]').forEach((r) => r.addEventListener('change', syncSecretMode));
     document.querySelectorAll('.toggle-vis').forEach((b) => {
       b.addEventListener('click', () => {

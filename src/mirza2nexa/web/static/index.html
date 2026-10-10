@@ -233,6 +233,24 @@
           <p class="help" id="previous-job-help">فقط تبدیل‌های کامل‌شده در همین نشست قابل انتخاب هستند. تفاوت تعداد رکوردها و موجودی‌ها در گزارش نمایش داده می‌شود.</p>
         </div>
 
+        <fieldset class="field" id="panel-targets-field" data-testid="panel-targets" aria-describedby="pt-help pt-safety">
+          <legend>پنل مقصد در NEXA (اختیاری)</legend>
+          <p class="help" id="pt-help">پنل اصلی در میرزا با نوع <bdi dir="ltr">marzban</bdi> ثبت شده است، اما همان پنل در NEXA از نوع <bdi dir="ltr">RickPanel</bdi> است. برای هر کد پنل میرزا که می‌خواهید، نوع پنل مقصد را مشخص کنید. اگر شناسه پنل NEXA را خالی بگذارید، پنل ابتدا باید در NEXA از مسیر امن ایجاد و سپس متصل شود.</p>
+          <ul class="help pt-safety" id="pt-safety">
+            <li>فقط نوع مقصد پنل‌های انتخاب‌شده در NEXA تعیین می‌شود.</li>
+            <li>مشتری، سرویس، حجم، تاریخ انقضا و شناسه‌های قدیمی هرگز تغییر نمی‌کنند.</li>
+            <li>هیچ سرویسی دوباره ساخته نمی‌شود و مبدل به هیچ پنلی وصل نمی‌شود.</li>
+            <li>هیچ اطلاعات ورود پنل (آدرس، نام کاربری، رمز یا توکن) اینجا وارد نمی‌شود.</li>
+          </ul>
+          <p class="help" id="pt-codes-status" data-testid="pt-codes-status"></p>
+          <datalist id="pt-codes"></datalist>
+          <div class="pt-rows" id="pt-rows" data-testid="pt-rows"></div>
+          <p class="field-error" id="panel-targets-error" data-testid="panel-targets-error" role="alert" hidden></p>
+          <div class="actions pt-actions">
+            <button type="button" class="btn btn-ghost btn-sm" id="pt-add" data-testid="pt-add">افزودن پنل مقصد</button>
+          </div>
+        </fieldset>
+
         <div class="actions">
           <button type="submit" class="btn btn-primary btn-lg" id="start-btn" data-testid="start-btn">شروع تبدیل</button>
           <button type="button" class="btn btn-ghost" id="back-step-2">بازگشت</button>
@@ -392,6 +410,7 @@
           <div class="card" id="readiness-panels" data-testid="readiness-panels">
             <h2>نگاشت پنل‌ها</h2>
             <dl class="kv-grid" id="readiness-panels-kv"></dl>
+            <div class="readiness-mini" id="readiness-panel-targets" data-testid="readiness-panel-targets"></div>
             <p class="muted small">مبدل هرگز به پنل‌ها وصل نمی‌شود و هیچ سرویسی را ایجاد، تمدید یا حذف نمی‌کند.</p>
           </div>
           <div class="card" id="readiness-import-blockers" data-testid="readiness-import-blockers">

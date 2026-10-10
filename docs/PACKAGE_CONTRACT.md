@@ -1,4 +1,4 @@
-# `.nxpkg` content contract: package schema `nexa.migration.mirza` 1.2.0
+# `.nxpkg` content contract: package schema `nexa.migration.mirza` 1.3.0
 
 The container format, meaning the encryption, chunking and checksums, is described in `NXPKG_FORMAT.md` and has
 not changed. This document covers the **content**: which files and records a package holds, and what an
@@ -10,6 +10,7 @@ importer may and may not do with each of them.
 |---|---|---|
 | 1.0.0 | Phase 1: customers, opening balances, debts, products, categories, invoices, services, panels, review queue | — |
 | 1.1.0 | Phase 2, additions only: archive and history files, configuration files, `reports/coverage.json`, a `schema` field on every record | A 1.0 reader that ignores unknown files and fields keeps working |
+| 1.3.0 | Additions only: `records/panel_target_mapping.jsonl` (operator-selected NEXA target panel type, RickPanel) and `reconciliation.panel_targets` | A 1.2 reader that ignores unknown files keeps working; absence means "no target selected", never "Marzban" |
 | 1.2.0 | Phase 3, additions only: service ownership, wallet difference analysis, panel/product mapping inputs, agent state, migration readiness and review taxonomy reports (marked *added in 1.2.0* below); three more catalogued fork tables (`botsaz_help` → `records/archive/`, `global_hidden_gateways` and `ai_business_chat` EXCLUDED); `help_category` rows now archived (secret-named columns dropped) | A 1.1 reader that ignores unknown files and fields keeps working. An importer that *consumes* 1.2 files must check `package_schema_version >= 1.2.0` and treat their absence in older packages as "not available", never as "empty" |
 
 The rules:
@@ -69,6 +70,7 @@ Many records also carry live-state flags, each fixed to `false` where it applies
 | `records/panel_mapping_template.jsonl` | `legacy_panel_mapping_template` | input to the owner's panel mapping form; holds no credentials (§7) |
 | `records/product_mapping_proposal.jsonl` | `legacy_product_mapping_proposal` | → `legacy_product_reviews` `PENDING_REVIEW`; no product is created (§9) |
 | `records/agents/state.jsonl` | `legacy_agent_state` | owner-decision summary per agent; `role_active` is always `false` (§9) |
+| `records/panel_target_mapping.jsonl` | `legacy_panel_target` | *added in 1.3.0.* Operator-selected NEXA target per legacy `code_panel` (only `rickpanel` / RickPanel, `PANELS_AND_ADOPTION.md` §3.1a). The importer must refuse any other `provider_type`, connect only to an existing ACTIVE `rickpanel` panel (`nexa_panel_id`) or create one through NEXA's secure settings with owner approval; services are adopted, never re-created |
 
 `record_type` names of the template/proposal files follow the producing module; an importer resolves them from
 the record itself and refuses unknown values (gate G5).

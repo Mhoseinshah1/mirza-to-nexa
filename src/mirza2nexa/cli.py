@@ -22,6 +22,7 @@ from pathlib import Path
 
 from .archive import cleanup_workspace, secure_workspace
 from .errors import MigrationError
+from .panel_targets import parse_cli as parse_cli_targets
 
 
 def _secret(ask: bool, env: str | None, prompt: str) -> str | None:
@@ -60,6 +61,7 @@ def cmd_convert(a: argparse.Namespace) -> int:
         opts = ConvertOptions(
             password=_secret(a.ask_password, a.password_env, "ZIP password: "),
             money_unit=a.money_unit,
+            panel_targets=parse_cli_targets(a.panel_target or []),
             package_passphrase=_secret(a.ask_package_passphrase, a.package_passphrase_env, "Package passphrase: "),
         )
         if a.previous_package:
@@ -214,6 +216,8 @@ def main(argv: list[str]) -> int:
     c.add_argument("backup")
     c.add_argument("-o", "--output", required=True)
     c.add_argument("--money-unit", choices=["toman", "rial"], default=None)
+    c.add_argument("--panel-target", action="append", metavar="CODE=rickpanel[,panel_id=UUID][,version=1.0.0]",
+                   help="NEXA target panel for a legacy code_panel (repeatable); only rickpanel (RickPanel)")
     c.add_argument("--ask-password", action="store_true")
     c.add_argument("--password-env")
     c.add_argument("--ask-package-passphrase", action="store_true")

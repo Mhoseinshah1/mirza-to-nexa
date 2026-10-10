@@ -85,6 +85,10 @@ def build(report: dict[str, Any], taxonomy: dict[str, Any], *, package_contract_
         "status": "MAPPED" if pm and _int(pm.get("pending_mapping")) == 0 and _int(pm.get("mapped")) > 0
         else "PENDING_OWNER_MAPPING",
         "service_status": status_bd.get("by_class") or {},
+        # operator-selected NEXA target panel types (e.g. RickPanel), separate from the NEXA panel ids
+        "targets": {k: _sec(report, "panel_targets").get(k) for k in
+                    ("panels", "selected", "connect_existing", "create_in_nexa_then_connect", "unmapped",
+                     "by_provider", "unknown_codes")} if _sec(report, "panel_targets") else {},
     }
 
     # ---- owner decisions (dynamic: listed only when the data shows they matter) ----------

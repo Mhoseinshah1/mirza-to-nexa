@@ -38,6 +38,8 @@ class ConvertOptions:
     delete_sql_after_parse: bool = True
     kdf_n: int = 2**17
     created_at: str | None = None
+    # Operator-selected NEXA target panel per legacy code_panel (panel_targets.py); never inferred.
+    panel_targets: list[Any] = field(default_factory=list)
 
 
 @dataclass
@@ -255,6 +257,20 @@ def _convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
     for s in sinks.values():
         s.close()
 
+    # Operator-selected NEXA target panels: an additional record per legacy panel code; the
+    # source panel facts and every customer/service record stay exactly as converted.
+    from . import panel_targets as _pt
+
+    pt_records, pt_recon, pt_unknown = _pt.build_records(_pt.read_template(stage_dir), list(opts.panel_targets))
+    if pt_records:
+        pt_sink = _SchemaSink(writer.open_jsonl("records/panel_target_mapping.jsonl"))
+        for r in pt_records:
+            pt_sink.write(r)
+        pt_sink.close()
+    outcome.reconciliation["panel_targets"] = pt_recon
+    if pt_unknown:
+        outcome.block("PANEL_TARGET_UNKNOWN_CODE", len(pt_unknown))
+
     readiness = "blocked" if outcome.blockers else "ready"
     report = {
         "report_version": "1.0.0",
@@ -375,6 +391,7 @@ def run_job(job, options: dict[str, Any]) -> None:
         previous_records_dir=prev_dir,
         previous_import_id=prev_import,
         limits=settings.archive_limits() if settings else ArchiveLimits(),
+        panel_targets=list(options.get("panel_targets") or []),
         delete_sql_after_parse=settings.delete_sql_after_parse if settings else True,
     )
     options.clear()

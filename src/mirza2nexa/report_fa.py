@@ -277,6 +277,7 @@ BLOCKER_CODE_FA: dict[str, str] = {
     "SOURCE_SCHEMA_MISSING_TABLE": "جدول الزامی ناموجود",
     "SOURCE_KEY_DUPLICATED": "کلید اصلی تکراری",
     "UNREPRESENTABLE_CELLS": "مقادیر غیرقابل خواندن",
+    "PANEL_TARGET_UNKNOWN_CODE": "پنل مقصد برای کد پنل ناموجود",
     "BALANCE_CHANGED_SINCE_PREVIOUS": "تغییر موجودی نسبت به بکاپ قبلی",
     "DUPLICATE_SOURCE_ID": "شناسه تلگرام تکراری",
     "SERVICE_ACCOUNTING_MISMATCH": "مغایرت شمارش سرویس‌ها",
@@ -305,6 +306,7 @@ BLOCKER_CATEGORY: dict[str, str] = {
     "SOURCE_KEY_DUPLICATED": "data_quality",
     "DUPLICATE_SOURCE_ID": "data_quality",
     "UNREPRESENTABLE_CELLS": "data_quality",
+    "PANEL_TARGET_UNKNOWN_CODE": "data_quality",
     "SERVICE_ACCOUNTING_MISMATCH": "data_quality",
 }
 
@@ -448,6 +450,15 @@ READINESS_KEY_FA: dict[str, str] = {
     "stale": "تصمیم‌های کهنه",
     "sealed": "مهر و موم شده",
     "admin_approved_unverified_is_proof": "تأیید مدیر اثبات است؟",
+    # panels.targets — operator-selected NEXA target panel type (panel_targets.py)
+    "targets": "پنل مقصد در NEXA",
+    "panels": "کدهای پنل",
+    "selected": "دارای پنل مقصد انتخاب‌شده",
+    "connect_existing": "اتصال به پنل موجود NEXA",
+    "create_in_nexa_then_connect": "ایجاد در NEXA از مسیر امن و سپس اتصال",
+    "unmapped": "بدون پنل مقصد",
+    "by_provider": "نوع پنل مقصد",
+    "unknown_codes": "کدهای انتخاب‌شده ناموجود در بکاپ",
 }
 
 # Ownership decisions for service candidates (``convert.py`` services decisions + readiness extras).

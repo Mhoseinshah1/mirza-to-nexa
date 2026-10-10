@@ -156,6 +156,35 @@ The section contains these fields:
 
 Name-only identities (`INVOICE_LOCATION_NOT_IN_REGISTRY`) and the `(no code_panel)` bucket cannot be expressed in the v1 map. NEXA treats an empty code as `NO_PANEL`, which goes to manual review, and only an explicit operator ADOPT approval may adopt it (NEXA `service-review.md` §1, owner decision 8). A proposal to let the map accept a `name_panel → panelId` entry for these is in §5.
 
+### 3.1a NEXA target panel type: RickPanel (operator selection, `records/panel_target_mapping.jsonl`)
+
+Mirza stores the main panel with type `marzban` because RickPanel's API is Marzban-compatible. In
+NEXA the panel is a **RickPanel** (version 1.0.0, declared by the operator). The operator selects
+the target per `code_panel` before conversion (UI «پنل مقصد در NEXA», CLI
+`--panel-target CODE=rickpanel[,panel_id=UUID][,version=1.0.0]`, API `panel_targets`). Nothing
+is inferred from the Mirza type: a panel without a selection keeps `OPERATOR_MUST_MAP`.
+
+The identifiers come from the NEXA source (`nexa-bot@9e604def`), never guessed:
+
+| Value | Evidence |
+|---|---|
+| provider id `rickpanel` | `packages/contracts/src/provider.ts:180` (`PROVIDER_TYPES`), persisted in `panels.provider_type` with CHECK `panels_provider_type_check` (`apps/api/src/infrastructure/persistence/schema.ts:2024,2182`) |
+| display name `RickPanel` | `provider.ts:1778`, `apps/api/src/modules/platform/providers/infrastructure/rickpanel.adapter.ts:144` |
+| importer rule | mapped panels must be `rickpanel`, ACTIVE, not archived; map entry `{codePanel, panelId}` (`docs/legacy-migration/importer.md:261,284-285`) |
+
+Only `rickpanel` is accepted as a target (`RickPanel`, `RIC Panel`, `marzban` … are refused). One
+record per legacy panel code (`legacy_panel_target`, `m2n.legacy_panel_target.v1`):
+`source_panel_type` (exactly as read from Mirza), `target` (`provider_type`, `provider_display_name`,
+`provider_version_declared`, `nexa_panel_id`, `binding` = `CONNECT_EXISTING_NEXA_PANEL` when a NEXA
+panel UUID is given, else `CREATE_IN_NEXA_THEN_CONNECT`, `evidence`), `nexa_panel_map_entry`
+(`{codePanel, panelId}` ready for the v1 map) and `services_reprovisioned: false`. A selection for
+a code that is not in the backup blocks the package (`PANEL_TARGET_UNKNOWN_CODE`).
+
+Every other record (customers, balances, services, volumes, expiries, legacy ids, panel registry,
+mapping template) is byte-identical with or without a selection (`tests/test_panel_targets.py`).
+The importer creates (only via NEXA's secure panel settings, with the owner's approval) or connects
+a `rickpanel` panel and then adopts existing accounts; it never re-creates a service.
+
 ### 3.2 Adoption flow, done by NEXA later, never by this converter
 
 1. **Candidate.** A `legacy_service_candidate` (core `records/services.jsonl`) carries a decision of `NAMED_PRODUCT` or `HIDDEN_SHAPE`, `provision: false` and `requires_live_panel_check: true`.

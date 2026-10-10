@@ -201,6 +201,15 @@ input[type="checkbox"], input[type="radio"] { width: 1.1rem; height: 1.1rem; acc
 .radio-card input { margin-top: .35rem; }
 .radio-card:has(input:checked) { border-color: var(--primary); background: var(--primary-soft); }
 .check-row { display: flex; gap: .6rem; align-items: center; font-weight: 600; }
+.pt-safety { padding-inline-start: 1.2rem; display: flex; flex-direction: column; gap: .15rem; }
+.pt-rows { display: flex; flex-direction: column; gap: .6rem; }
+.pt-row {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: .6rem; align-items: end;
+  padding: .7rem .8rem; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2);
+}
+.pt-row .pt-remove { justify-self: start; }
+.pt-row input[dir="ltr"] { text-align: left; }
+.pt-actions { margin-top: .2rem; }
 .filters { display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end; }
 .filters select, .filters input { width: auto; min-width: 160px; }
 .settings-form .field { padding-bottom: .9rem; border-bottom: 1px solid var(--border); }

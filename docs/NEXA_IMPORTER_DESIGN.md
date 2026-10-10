@@ -193,6 +193,17 @@ credentials. The owner fills the mapping in the NEXA UI (legacy panel code → N
 decision, decided_by, decided_at)`. Panel credentials are entered only through NEXA's own secret flow;
 the package never contains them. No panel API is called while mapping.
 
+### 7.1 Target panel type (`records/panel_target_mapping.jsonl`, contract ≥ 1.3.0)
+
+For each `legacy_panel_target` with a `target`: `provider_type` must be exactly `rickpanel`
+(`PROVIDER_TYPES`, `provider.ts:180`) — anything else, or a mismatch with the adapter registry,
+fails closed. `CONNECT_EXISTING_NEXA_PANEL`: the `nexa_panel_id` must be an existing ACTIVE,
+non-archived `rickpanel` panel of the tenant and becomes the `{codePanel, panelId}` entry of the
+`nexa-legacy-panel-map/v1`. `CREATE_IN_NEXA_THEN_CONNECT`: the run stops at panel mapping until an
+administrator creates the RickPanel through NEXA's secure panel settings (credentials entered
+there, never from the package) and binds it. A panel with no target stays `PANEL_UNMAPPED`. No
+Create/Delete/Renew/Reset/Disable is ever sent to the panel; accounts are adopted, never re-created.
+
 ## 8. Service ownership decisions
 
 Input: `records/service_ownership.jsonl` (`legacy_service_ownership`), one row per service candidate with
