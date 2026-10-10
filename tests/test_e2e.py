@@ -435,3 +435,110 @@ def test_migration_readiness_page_and_downloads(ui, server, tmp_path):
     assert 'dir="rtl"' in html_text and "<script" not in html_text.lower()
     assert not set(re.findall(r"\d{6,}", html_text)) & tg_ids
     probs.assert_clean()
+
+
+def _card(page, cls: str) -> int:
+    return int(page.get_attribute(f"[data-testid=own-card-{cls}] .stat-value", "data-value") or "0")
+
+
+def _fa(n: int) -> str:
+    return str(n).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+
+
+def test_bulk_ownership_review_approve_and_undo(ui, server, tmp_path):
+    """«بررسی مالکیت سرویس‌ها»: filter attestable pending services, select all filtered results,
+    plan APPROVE, confirm by typing the count (Persian digits), commit, then undo the batch.
+    Admin attestation is counted apart from proven ownership."""
+    zp, _ = make_backup(tmp_path, users=150, name="ownership.zip")
+    page, probs = ui
+    open_app(page, server)
+    page.click("[data-testid=nav-ownership]")
+    assert PERSIAN.search(page.text_content("#own-empty") or "")
+
+    upload(page, zp)
+    start(page, password=None, money_unit="toman")
+    assert wait_terminal(page) == "completed"
+
+    page.click("[data-testid=nav-ownership]")
+    page.wait_for_selector("[data-testid=own-card-PROVEN] .stat-value[data-value]")
+    page.wait_for_selector("[data-testid=own-table] tbody tr[data-key]")
+    assert "اثبات نشده" in (page.text_content("[data-testid=own-card-ADMIN_ATTESTED]") or "")
+    assert page.is_visible("[data-testid=own-disclaimer]")
+    assert page.is_visible("[data-testid=own-live-off]")  # read-only panel check is off by default
+    proven0, attested0 = _card(page, "PROVEN"), _card(page, "ADMIN_ATTESTED")
+    assert proven0 > 0
+    for tid in ("own-act-approve", "own-act-reject", "own-act-reset"):
+        assert page.is_disabled(f"[data-testid={tid}]")
+
+    # filter: attestable + pending
+    page.select_option("[data-testid=own-f-eligibility]", "ATTESTABLE")
+    page.select_option("[data-testid=own-f-review_state]", "PENDING")
+    page.click("[data-testid=own-apply]")
+    page.wait_for_function(
+        "() => { const r = [...document.querySelectorAll('[data-testid=own-table] tbody tr[data-key]')];"
+        " return r.length > 0 && r.every(x => x.dataset.eligibility === 'ATTESTABLE' && x.dataset.reviewState === 'PENDING'); }")
+    rows = page.locator("[data-testid=own-table] tbody tr[data-key]")
+    n = rows.count()
+    assert n > 0
+
+    # detail dialog: opens from the invoice key button, closes with the close button
+    rows.first.locator("[data-testid=own-open-detail]").click()
+    page.wait_for_selector("[data-testid=own-detail][open] [data-testid=own-detail-kv]")
+    assert PERSIAN.search(page.text_content("[data-testid=own-detail]") or "")
+    page.click("[data-testid=own-detail-close]")
+    page.wait_for_selector("[data-testid=own-detail]:not([open])", state="attached")
+
+    # select every filtered result, untick one row (excluded), tick it again
+    page.click("[data-testid=own-select-filtered]")
+    sel = page.locator("[data-testid=own-sel-count]")
+    assert sel.get_attribute("data-mode") == "filter" and sel.get_attribute("data-count") == str(n)
+    rows.first.locator("input.own-row-check").uncheck()
+    assert sel.get_attribute("data-count") == str(n - 1)
+    rows.first.locator("input.own-row-check").check()
+    assert sel.get_attribute("data-count") == str(n)
+
+    # plan APPROVE → confirmation dialog
+    page.click("[data-testid=own-act-approve]")
+    page.wait_for_selector("[data-testid=own-plan-dialog][open]")
+    assert page.is_visible("[data-testid=own-plan-attest]")
+    assert "اثبات مالکیت نیست" in (page.text_content("[data-testid=own-plan-attest]") or "")
+    assert page.locator("[data-testid=own-plan-risks] li[data-code=ADMIN_ATTESTATION_NOT_PROOF]").count() == 1
+    assert page.is_disabled("[data-testid=own-plan-commit]")
+    page.fill("[data-testid=own-plan-count]", _fa(n + 1))
+    page.check("[data-testid=own-plan-ack]")
+    assert page.is_disabled("[data-testid=own-plan-commit]")  # wrong count
+    page.fill("[data-testid=own-plan-count]", _fa(n))
+    assert page.is_enabled("[data-testid=own-plan-commit]")
+    page.click("[data-testid=own-plan-commit]")
+    page.wait_for_selector("[data-testid=own-plan-dialog]:not([open])", state="attached")
+    page.wait_for_function(
+        f"() => document.querySelector('[data-testid=own-card-ADMIN_ATTESTED] .stat-value')?.dataset.value === '{attested0 + n}'")
+    assert _card(page, "PROVEN") == proven0
+    page.wait_for_selector("[data-testid=own-table] tbody td.empty")  # filter (PENDING) now empty
+
+    # readiness shows the administrator's decisions beside (never inside) proven ownership
+    page.click("[data-testid=nav-readiness]")
+    page.wait_for_selector("[data-testid=readiness-admin-review]")
+    assert page.get_attribute("[data-testid=readiness-admin-admin_attested] .stat-value", "data-value") == str(attested0 + n)
+    assert page.get_attribute("[data-testid=readiness-admin-proven] .stat-value", "data-value") == str(proven0)
+    assert "اثبات نشده" in (page.text_content("[data-testid=readiness-admin-admin_attested]") or "")
+    page.click("[data-testid=nav-ownership]")
+    page.wait_for_selector("[data-testid=own-batches] [data-testid=own-undo]")
+
+    # undo the batch through the same confirmation dialog
+    page.click("[data-testid=own-batches] [data-testid=own-undo]")
+    page.wait_for_selector("[data-testid=own-plan-dialog][open]")
+    assert page.is_hidden("[data-testid=own-plan-attest]")
+    page.fill("[data-testid=own-plan-count]", str(n))
+    page.check("[data-testid=own-plan-ack]")
+    page.click("[data-testid=own-plan-commit]")
+    page.wait_for_selector("[data-testid=own-plan-dialog]:not([open])", state="attached")
+    page.wait_for_function(
+        f"() => document.querySelector('[data-testid=own-card-ADMIN_ATTESTED] .stat-value')?.dataset.value === '{attested0}'")
+    assert _card(page, "PROVEN") == proven0
+    assert page.locator("[data-testid=own-batches] [data-testid=own-undo]").count() == 0
+
+    # audit chain verifies
+    page.click("[data-testid=own-audit-verify]")
+    page.wait_for_selector("[data-testid=own-audit-result][data-ok=true]")
+    probs.assert_clean()

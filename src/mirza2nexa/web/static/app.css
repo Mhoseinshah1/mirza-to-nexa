@@ -399,3 +399,47 @@ details.recon-section > summary h3 { display: inline-block; margin: 0 0 .3rem; }
 .readiness-tables { list-style: none; padding: 0; margin: .3rem 0; display: flex; flex-wrap: wrap; gap: .4rem; }
 .readiness-tables li { background: var(--bad-soft); color: var(--bad); border-radius: 999px; padding: .1rem .6rem; font-size: .85rem; }
 .readiness .key-code { font-family: var(--mono); font-size: .72rem; font-weight: 400; color: var(--muted); direction: ltr; unicode-bidi: isolate; margin-inline-start: .4rem; }
+
+/* ---- bulk ownership review ---- */
+#own-body { display: flex; flex-direction: column; gap: 1rem; }
+.own-sealed { background: var(--ok-soft); color: var(--ok); border: 2px solid var(--ok); border-radius: var(--radius); padding: .8rem 1.1rem; font-weight: 700; }
+.own-summary { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.own-card { border-inline-start-width: 5px; }
+.own-card .own-card-sub { color: var(--muted); }
+.own-card.own-proven { border-color: var(--ok); background: var(--ok-soft); }
+.own-card.own-proven .stat-value { color: var(--ok); }
+/* Admin attestation must never look like proof: dashed amber frame, never the green of PROVEN. */
+.own-card.own-attested { border: 2px dashed var(--warn); background: var(--warn-soft); }
+.own-card.own-attested .stat-value { color: var(--warn); }
+.own-card.own-attested .stat-label::after { content: " ⚠"; }
+.own-card.own-pending { border-color: var(--primary); }
+.own-card.own-rejected { border-color: var(--bad); }
+.own-card.own-rejected .stat-value, .own-card.own-quarantined .stat-value { color: var(--bad); }
+.own-card.own-quarantined { border-color: var(--bad); background: var(--bad-soft); }
+.own-filter-actions { margin-top: 0; }
+.own-selbar { display: flex; justify-content: space-between; align-items: center; gap: .8rem; flex-wrap: wrap; margin-bottom: .8rem; }
+.own-selinfo { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; font-weight: 600; }
+.own-actions { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+.own-actions input[type="text"] { width: 260px; }
+.own-table th.own-check, .own-table td.own-check { width: 2.4rem; text-align: center; }
+.own-table tbody tr[data-key] { cursor: pointer; }
+.own-table tbody tr.is-selected { background: var(--primary-soft); }
+.own-table tbody tr.is-unviewed td:nth-child(2) .linkish { font-weight: 700; }
+.linkish { background: none; border: 0; padding: 0; font: inherit; color: var(--primary); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.badge.own-fc-PROVEN { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+.badge.own-fc-ADMIN_ATTESTED { background: var(--warn-soft); color: var(--warn); border: 1px dashed var(--warn); }
+.badge.own-fc-PENDING { background: var(--primary-soft); color: var(--primary); border-color: transparent; }
+.badge.own-fc-REJECTED, .badge.own-fc-QUARANTINED { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
+.badge.own-elig-QUARANTINE_ONLY { color: var(--bad); }
+.badge.own-sev-high { background: var(--bad-soft); color: var(--bad); border-color: var(--bad); }
+.badge.own-sev-medium { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.badge.own-sev-info { background: var(--primary-soft); color: var(--primary); border-color: transparent; }
+.own-risk.sev-high { border-inline-start: 4px solid var(--bad); }
+.own-risk.sev-medium { border-inline-start: 4px solid var(--warn); }
+.dialog.dialog-wide { max-width: 860px; max-height: calc(100vh - 3rem); overflow-y: auto; }
+.dialog h3 { font-size: .95rem; margin: .9rem 0 .4rem; }
+.own-drawer { margin-inline-end: 0; margin-block: 0; height: 100vh; max-height: 100vh; border-radius: 0; }
+.own-export-pass { margin-top: 1rem; }
+.own-table td { white-space: nowrap; }
+.own-table td:last-child { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.own-table td .lbl { white-space: nowrap; }

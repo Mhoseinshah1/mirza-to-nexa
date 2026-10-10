@@ -440,6 +440,14 @@ READINESS_KEY_FA: dict[str, str] = {
     "conflict_warnings_before": "هشدار تعارض (پیش از تحلیل)",
     "conflict_warnings_after": "هشدار تعارض (پس از تحلیل)",
     "proven_by_data": "اثبات‌شده با داده",
+    "admin_review": "بررسی مدیر (جدا از اثبات)",
+    "admin_attested": "تأیید مدیر (اثبات نشده)",
+    "pending": "در انتظار تصمیم",
+    "rejected": "رد شده — قرنطینه",
+    "quarantined": "قرنطینه سیستمی",
+    "stale": "تصمیم‌های کهنه",
+    "sealed": "مهر و موم شده",
+    "admin_attested_is_proof": "تأیید مدیر اثبات است؟",
 }
 
 # Ownership decisions for service candidates (``convert.py`` services decisions + readiness extras).
@@ -557,6 +565,110 @@ REVIEW_ACTIONABILITY_FA: dict[str, str] = {
 }
 
 
+# Bulk ownership review (``ownership_review.py``, docs/OWNERSHIP_REVIEW.md). ADMIN_ATTESTED is never proof.
+OWNERSHIP_FINAL_CLASS_FA: dict[str, str] = {
+    "PROVEN": "مالکیت اثبات‌شده",
+    "ADMIN_ATTESTED": "تأیید مدیر (اثبات نشده)",
+    "PENDING": "در انتظار تصمیم",
+    "REJECTED": "رد شده — قرنطینه",
+    "QUARANTINED": "قرنطینه سیستمی",
+}
+
+OWNERSHIP_REVIEW_STATE_FA: dict[str, str] = {
+    "PENDING": "در انتظار",
+    "APPROVED": "تأییدشده توسط مدیر",
+    "REJECTED": "ردشده توسط مدیر",
+}
+
+OWNERSHIP_ELIGIBILITY_FA: dict[str, str] = {
+    "PROVEN": "اثبات‌شده با شواهد",
+    "ATTESTABLE": "قابل تأیید مدیر",
+    "QUARANTINE_ONLY": "فقط قرنطینه",
+}
+
+OWNERSHIP_LIVE_STATUS_FA: dict[str, str] = {
+    "NOT_CHECKED": "بررسی نشده",
+    "LIVE_ACTIVE": "فعال روی پنل",
+    "LIVE_DISABLED": "غیرفعال روی پنل",
+    "LIVE_LIMITED": "محدودشده (حجم) روی پنل",
+    "LIVE_EXPIRED": "منقضی روی پنل",
+    "LIVE_ON_HOLD": "در انتظار شروع روی پنل",
+    "NOT_FOUND_ON_PANEL": "روی پنل پیدا نشد",
+    "CHECK_ERROR": "خطا در بررسی",
+    "UNSUPPORTED_PANEL": "نوع پنل پشتیبانی نمی‌شود",
+}
+
+OWNERSHIP_RISK_FA: dict[str, str] = {
+    "ADMIN_ATTESTATION_NOT_PROOF": "تأیید مدیر اثبات مالکیت نیست؛ این موارد جدا از موارد اثبات‌شده نگه داشته می‌شوند",
+    "UNVIEWED_ITEMS": "مواردی که هرگز باز و بررسی نشده‌اند",
+    "LIVE_NOT_CHECKED": "وضعیت روی پنل بررسی نشده است",
+    "LIVE_NOT_FOUND": "سرویس روی پنل پیدا نشد",
+    "LIVE_CHECK_ERROR": "بررسی وضعیت روی پنل با خطا مواجه شد",
+    "STATUS_REMOVED_OR_EXPIRED": "فاکتور حذف‌شده یا منقضی است",
+    "REJECT_PROVEN": "رد سرویسی که مالکیت آن اثبات شده است",
+    "STALE_BINDING": "تصمیم قبلی مربوط به نسخه دیگری از رکورد است",
+    "NOT_ELIGIBLE_EXCLUDED": "موارد غیرقابل اعمال کنار گذاشته می‌شوند",
+}
+
+OWNERSHIP_ACTION_FA: dict[str, str] = {
+    "APPROVE": "تأیید مالک ثبت‌شده در فاکتور",
+    "REJECT": "رد و انتقال به قرنطینه",
+    "RESET": "بازگشت به در انتظار",
+    "UNDO": "بازگرداندن دسته",
+    "SEAL": "مهر و موم",
+    "LIVE_CHECK": "بررسی فقط‌خواندنی پنل",
+    "BATCH_APPROVE": "ثبت دسته تأیید",
+    "BATCH_REJECT": "ثبت دسته رد",
+    "BATCH_RESET": "ثبت دسته بازگشت به در انتظار",
+    "BATCH_UNDO": "ثبت دسته بازگرداندن",
+}
+
+OWNERSHIP_BASIS_FA: dict[str, str] = {
+    "EVIDENCE": "شواهد بکاپ",
+    "ADMIN_ATTESTATION": "تأیید مدیر (اثبات نیست)",
+    "NONE": "بدون تصمیم",
+    "ADMIN_REJECTION": "رد توسط مدیر",
+    "SYSTEM_QUARANTINE": "قرنطینه سیستمی",
+}
+
+# Short labels for modules/ownership.py reason codes (the long explanations live there).
+OWNERSHIP_REASON_FA: dict[str, str] = {
+    "OWNERSHIP_OWNER_ID_INVALID": "شناسه مالک فاکتور نامعتبر",
+    "OWNERSHIP_OWNER_NOT_IN_USER_TABLE": "مالک فاکتور در جدول کاربران نیست",
+    "OWNERSHIP_MULTIPLE_CLAIMANTS": "چند مدعی مالکیت",
+    "OWNERSHIP_USERNAME_SHARED_BY_INVOICES": "نام کاربری مشترک بین چند فاکتور",
+    "OWNERSHIP_TRANSFER_ORDER_UNPROVEN": "ترتیب انتقال‌ها اثبات‌نشده",
+    "OWNERSHIP_TRANSFER_TARGET_INVALID": "طرف انتقال نامعتبر",
+    "OWNERSHIP_TRANSFER_CHAIN_BROKEN": "زنجیره انتقال گسسته",
+    "OWNERSHIP_TRANSFER_NOT_APPLIED_TO_INVOICE": "انتقال در فاکتور اعمال نشده",
+    "OWNERSHIP_ACTION_OUTSIDE_HOLDING_WINDOW": "عملیات خارج از بازه مالکیت",
+    "OWNERSHIP_ACTOR_NOT_IN_USER_TABLE": "کاربر عملیات در جدول کاربران نیست",
+    "OWNERSHIP_OWNER_MISMATCH_NO_TRANSFER_RECORD": "عملیات کاربر دیگر بدون سابقه انتقال",
+    "OWNERSHIP_NO_INVOICE_FOR_USERNAME": "فاکتوری برای این نام کاربری نیست",
+    "OWNERSHIP_TRANSFER_CHAIN_PROVEN": "زنجیره انتقال اثبات‌شده",
+    "OWNERSHIP_ADMIN_ACTOR_NOT_OWNER": "عملیات توسط مدیر (نه مالک)",
+    "OWNERSHIP_PAYER_NOT_OWNER": "پرداخت‌کننده غیر از مالک",
+    "NO_INVOICE": "بدون فاکتور",
+    "OWNER_NOT_IMPORTABLE": "مالک فاکتور قابل انتقال نیست",
+    "QUARANTINE_ONLY": "فقط قرنطینه",
+    "ALREADY_SEALED": "مهر و موم شده",
+    "ALREADY_PROVEN": "مالکیت از قبل اثبات شده است",
+    "ALREADY_QUARANTINED": "از قبل در قرنطینه سیستمی است",
+    "NO_VALID_INVOICE_OWNER": "مالک معتبری در فاکتور نیست",
+}
+
+# Invoice status classes (modules/adoption.py CLASSES).
+STATUS_CLASS_FA: dict[str, str] = {
+    "ACTIVE": "فعال",
+    "TEST": "تست",
+    "EXPIRED": "منقضی",
+    "DISABLED": "غیرفعال",
+    "REMOVED": "حذف‌شده",
+    "NOT_PROVISIONED": "ساخته‌نشده روی پنل",
+    "UNKNOWN": "نامشخص",
+}
+
+
 def readiness_label(table: dict[str, str], code: Any, fallback: Any = None) -> str:
     """Persian label for a readiness code, else the server-provided Persian label, else the code."""
     k = str(code if code is not None else "")
@@ -594,6 +706,17 @@ def labels_payload() -> dict[str, Any]:
         "confirmed_by": CONFIRMED_BY_FA,
         "import_blockers": IMPORT_BLOCKER_FA,
         "review_actionability": REVIEW_ACTIONABILITY_FA,
+        "ownership_review": {
+            "final_class": OWNERSHIP_FINAL_CLASS_FA,
+            "review_state": OWNERSHIP_REVIEW_STATE_FA,
+            "eligibility": OWNERSHIP_ELIGIBILITY_FA,
+            "live_status": OWNERSHIP_LIVE_STATUS_FA,
+            "risk": OWNERSHIP_RISK_FA,
+            "action": OWNERSHIP_ACTION_FA,
+            "reason": OWNERSHIP_REASON_FA,
+            "status_class": STATUS_CLASS_FA,
+            "basis": OWNERSHIP_BASIS_FA,
+        },
     }
 
 

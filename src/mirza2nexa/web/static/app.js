@@ -204,6 +204,27 @@
     money_units: { toman: 'تومان', rial: 'ریال', IRT: 'تومان', IRR: 'ریال' },
     confirmed_by: { operator: 'اپراتور', evidence: 'شواهد داخل بکاپ' },
     import_blockers: {},
+    ownership_review: {
+      final_class: {
+        PROVEN: 'مالکیت اثبات‌شده',
+        ADMIN_ATTESTED: 'تأیید مدیر (اثبات نشده)',
+        PENDING: 'در انتظار تصمیم',
+        REJECTED: 'رد شده — قرنطینه',
+        QUARANTINED: 'قرنطینه سیستمی',
+      },
+      review_state: { PENDING: 'در انتظار', APPROVED: 'تأییدشده توسط مدیر', REJECTED: 'ردشده توسط مدیر' },
+      eligibility: { PROVEN: 'اثبات‌شده', ATTESTABLE: 'قابل تأیید مدیر', QUARANTINE_ONLY: 'فقط قرنطینه' },
+      action: {
+        APPROVE: 'تأیید مالک ثبت‌شده در فاکتور',
+        REJECT: 'رد و انتقال به قرنطینه',
+        RESET: 'بازگشت به در انتظار',
+        UNDO: 'بازگرداندن دسته',
+      },
+      live_status: { NOT_CHECKED: 'بررسی نشده' },
+      risk: {},
+      reason: {},
+      status_class: {},
+    },
   };
   const own = (o, k) => (o && Object.prototype.hasOwnProperty.call(o, k) ? o[k] : undefined);
   function humanise(k) {
@@ -414,7 +435,7 @@
   }
 
   // ------------------------------------------------------------------ navigation
-  const VIEWS = ['dashboard', 'new', 'status', 'report', 'readiness', 'coverage', 'review', 'preview', 'download', 'history', 'settings'];
+  const VIEWS = ['dashboard', 'new', 'status', 'report', 'readiness', 'ownership', 'coverage', 'review', 'preview', 'download', 'history', 'settings'];
   const onShow = {};
 
   function go(view, opts) {
@@ -428,6 +449,7 @@
       else b.removeAttribute('aria-current');
     });
     if (view !== 'dashboard') stopDashTimer();
+    if (view !== 'ownership') ownStopLivePoll();
     if (onShow[view]) onShow[view](opts || {});
     if (!opts || opts.focus !== false) {
       const h = document.querySelector('#view-' + view + ' h1');
@@ -1643,6 +1665,26 @@
     if (ow.available === false) ox.append(el('p', { class: 'muted small', text: 'تحلیل مالکیت سرویس‌ها در این بکاپ در دسترس نبود.' }));
     const ot = countTable(ow.by_decision, (k) => codeLabel(L.ownership_decisions, k), 'تصمیم', 'readiness-decisions');
     if (ot) ox.append(ot);
+    const ar = ow.admin_review && typeof ow.admin_review === 'object' ? ow.admin_review : null;
+    if (ar) {
+      // Administrator decisions are shown beside (never inside) proven ownership.
+      const fcl = (k) => own(own(L.ownership_review || {}, 'final_class') || {}, k) || rkLabel(k);
+      const tile = (key, cls, label) => el('div', { class: 'card stat own-card ' + cls, 'data-testid': 'readiness-admin-' + key },
+        el('div', { class: 'stat-label', text: label }),
+        el('div', { class: 'stat-value num', 'data-value': String(Number(ar[key]) || 0), text: fmtNum(Number(ar[key]) || 0) }));
+      ox.append(el('div', { class: 'readiness-mini', 'data-testid': 'readiness-admin-review' },
+        el('h3', { text: rkLabel('admin_review') }),
+        el('div', { class: 'stat-grid own-summary' },
+          tile('proven', 'own-proven', fcl('PROVEN')),
+          tile('admin_attested', 'own-attested', fcl('ADMIN_ATTESTED')),
+          tile('pending', 'own-pending', fcl('PENDING')),
+          tile('rejected', 'own-rejected', fcl('REJECTED')),
+          tile('quarantined', 'own-quarantined', fcl('QUARANTINED'))),
+        el('p', { class: 'small warn-text', text: 'تأیید مدیر اثبات مالکیت نیست و جدا از «مالکیت اثبات‌شده» شمرده می‌شود.' }),
+        el('dl', { class: 'kv-grid' },
+          el('dt', null, labelWithCode(rkLabel('stale'), 'stale')), el('dd', { text: fmtNum(Number(ar.stale) || 0) }),
+          el('dt', null, labelWithCode(rkLabel('sealed'), 'sealed')), el('dd', null, yesNo(ar.sealed)))));
+    }
 
     // panels
     const pn = obj(r.panels);
@@ -2136,6 +2178,931 @@
     }
   }
 
+  // ------------------------------------------------------------------ bulk ownership review
+  // Server-side filtering and pagination only (5,000+ services): the page never fetches all items.
+  // Selection is either explicit keys or "all filtered results" minus excluded keys; the server
+  // resolves it in a two-phase plan → commit flow. Owner details are shown only in the detail dialog.
+  const OWN_PAGE = 100;
+  const OWN_FILTERS = ['final_class', 'eligibility', 'review_state', 'panel', 'status_class', 'reason', 'live_status'];
+  const OWN_CLASSES = ['PROVEN', 'ADMIN_ATTESTED', 'PENDING', 'REJECTED', 'QUARANTINED'];
+  const OWN = {
+    jobId: null,
+    summary: null,
+    facets: null,
+    filter: {},
+    q: '',
+    offset: 0,
+    total: 0,
+    items: [],
+    sel: { mode: 'keys', keys: new Set() },
+    plan: null,
+    planReq: null,
+    livePoll: null,
+    loadSeq: 0,
+  };
+  const ownPath = (suffix) => jobPath(OWN.jobId, '/ownership' + (suffix || ''));
+  const OR = () => L.ownership_review || {};
+  const ownLabel = (group, code) => codeLabel(own(OR(), group) || {}, code);
+  function ownReasonLabel(code) {
+    const c = String(code);
+    return own(own(OR(), 'reason') || {}, c) || own(own(OR(), 'eligibility') || {}, c) || own(own(OR(), 'final_class') || {}, c)
+      || own(L.review_codes, c) || own(L.ownership_decisions, c) || humanise(c);
+  }
+  function facetLabel(group, code) {
+    if (group === 'panel') return code === '(none)' ? 'بدون پنل' : String(code);
+    if (group === 'reason') return ownReasonLabel(code);
+    return ownLabel(group, code);
+  }
+  function fmtWhen(v) {
+    if (v === null || v === undefined || v === '') return '—';
+    if (typeof v === 'number' || /^\d+(\.\d+)?$/.test(String(v))) return fmtDate(Number(v));
+    const t = Date.parse(String(v));
+    return Number.isFinite(t) ? fmtDate(t / 1000) : String(v);
+  }
+  const ownSealed = () => !!(OWN.summary && OWN.summary.sealed);
+
+  onShow.ownership = function () {
+    const ok = S.job && S.job.status === 'completed';
+    $('own-body').hidden = !ok;
+    $('own-empty').hidden = ok;
+    $('own-empty').textContent = notReadyMessage('بررسی مالکیت سرویس‌ها');
+    if (!ok) return;
+    if (OWN.jobId !== S.job.id) {
+      OWN.jobId = S.job.id;
+      OWN.filter = {};
+      OWN.q = '';
+      OWN.offset = 0;
+      OWN.summary = null;
+      OWN.facets = null;
+      ownClearSelection();
+      $('own-q').value = '';
+      $('own-audit-result').hidden = true;
+      $('own-export-pass-form').hidden = true;
+    }
+    ownRefreshAll();
+  };
+
+  async function ownRefreshAll() {
+    if (S.readinessFor === OWN.jobId) S.readinessFor = null;  // admin_review overlay may change
+    await Promise.all([ownLoadSummary(), ownLoadFacets(), ownLoadItems(OWN.offset)]);
+    ownLoadBatches();
+    ownLoadAudit();
+    ownLoadLive();
+  }
+
+  function ownHandleError(e) {
+    if (e.status === 401) return;
+    if (e.status === 404 && e.code === 'job.not_found') return jobVanished();
+    showError(e);
+  }
+
+  // ---- summary
+  async function ownLoadSummary() {
+    try {
+      const s = await api('GET', ownPath('/summary'));
+      if (S.view !== 'ownership') return;
+      OWN.summary = s;
+      ownRenderSummary();
+    } catch (e) {
+      if (e.status === 404 && e.code !== 'job.not_found') {
+        $('own-body').hidden = true;
+        $('own-empty').hidden = false;
+        $('own-empty').textContent = e.message || notReadyMessage('بررسی مالکیت سرویس‌ها');
+        return;
+      }
+      ownHandleError(e);
+    }
+  }
+
+  function ownRenderSummary() {
+    const s = OWN.summary || {};
+    const t = obj(s.totals);
+    const box = $('own-summary');
+    clear(box);
+    const card = (cls, label, sub, cssCls) =>
+      el('div', { class: 'card stat own-card ' + cssCls, 'data-testid': 'own-card-' + cls, 'data-class': cls },
+        el('div', { class: 'stat-label', text: label }),
+        el('div', { class: 'stat-value num', 'data-value': String(Number(t[cls]) || 0), text: fmtNum(Number(t[cls]) || 0) }),
+        sub ? el('div', { class: 'own-card-sub small', text: sub }) : null);
+    box.append(
+      el('div', { class: 'card stat own-card own-card-total', 'data-testid': 'own-card-items' },
+        el('div', { class: 'stat-label', text: 'کل سرویس‌ها' }),
+        el('div', { class: 'stat-value num', 'data-value': String(Number(t.items) || 0), text: fmtNum(Number(t.items) || 0) })),
+      card('PROVEN', ownLabel('final_class', 'PROVEN'), 'با شواهد بکاپ', 'own-proven'),
+      card('ADMIN_ATTESTED', ownLabel('final_class', 'ADMIN_ATTESTED'), 'تصمیم مدیر — جدا از اثبات‌شده', 'own-attested'),
+      card('PENDING', ownLabel('final_class', 'PENDING'), null, 'own-pending'),
+      card('REJECTED', ownLabel('final_class', 'REJECTED'), null, 'own-rejected'),
+      card('QUARANTINED', ownLabel('final_class', 'QUARANTINED'), 'قابل تأیید در این صفحه نیست', 'own-quarantined'));
+    const meta = [];
+    if (s.viewed !== undefined) meta.push('بازشده: ' + fmtNum(s.viewed));
+    if (s.stale) meta.push('تصمیم‌های کهنه (پس از تبدیل دوباره): ' + fmtNum(s.stale));
+    const live = obj(s.live);
+    if (live.enabled && live.checked) meta.push('بررسی‌شده روی پنل: ' + fmtNum(live.checked));
+    if (s.import_id) meta.push('شناسه Import: ' + String(s.import_id));
+    $('own-summary-meta').textContent = meta.join(' — ');
+    $('own-disclaimer-text').textContent = s.disclaimer_fa ? String(s.disclaimer_fa)
+      : 'سرویس‌هایی که مدیر تأیید می‌کند همیشه با برچسب «تأیید مدیر» و جدا از مالکیت اثبات‌شده گزارش و صادر می‌شوند.';
+    const sealed = !!s.sealed;
+    const banner = $('own-sealed');
+    banner.hidden = !sealed;
+    banner.textContent = sealed ? 'تصمیم‌ها مهر و موم شده‌اند' + (s.sealed_at ? ' (' + fmtWhen(s.sealed_at) + ')' : '') + '؛ دیگر هیچ تغییری ممکن نیست.' : '';
+    $('own-seal').disabled = sealed;
+    ownSyncSelection();
+  }
+
+  // ---- facets / filters
+  async function ownLoadFacets() {
+    try {
+      const f = await api('GET', ownPath('/facets'));
+      if (S.view !== 'ownership') return;
+      OWN.facets = f || {};
+      ownRenderFacets();
+    } catch (e) {
+      if (e.status !== 404) ownHandleError(e);
+    }
+  }
+
+  function ownRenderFacets() {
+    const f = OWN.facets || {};
+    for (const k of OWN_FILTERS) {
+      const sel = $('own-f-' + k);
+      const cur = OWN.filter[k] || '';
+      clear(sel);
+      sel.append(el('option', { value: '', text: 'همه' }));
+      const vals = objList(f[k]);
+      let seen = false;
+      for (const v of vals) {
+        const value = v.value === null || v.value === undefined ? '' : String(v.value);
+        if (value === '') continue;
+        if (value === cur) seen = true;
+        sel.append(el('option', { value, text: facetLabel(k, value) + ' (' + fmtNum(Number(v.count) || 0) + ')' }));
+      }
+      if (cur && !seen) sel.append(el('option', { value: cur, text: facetLabel(k, cur) + ' (۰)' }));
+      sel.value = cur;
+    }
+    const lp = $('own-live-panel');
+    const keep = lp.value;
+    clear(lp);
+    for (const v of objList(f.panel)) {
+      if (v.value === null || v.value === undefined || v.value === '' || v.value === '(none)') continue;
+      lp.append(el('option', { value: String(v.value), text: String(v.value) + ' (' + fmtNum(Number(v.count) || 0) + ')' }));
+    }
+    if (keep && [...lp.options].some((o) => o.value === keep)) lp.value = keep;
+  }
+
+  function ownReadFilters() {
+    const f = {};
+    for (const k of OWN_FILTERS) {
+      const v = $('own-f-' + k).value;
+      if (v) f[k] = v;
+    }
+    OWN.filter = f;
+    OWN.q = $('own-q').value.trim();
+  }
+  function ownQuery(offset, limit) {
+    const p = new URLSearchParams();
+    for (const k of OWN_FILTERS) if (OWN.filter[k]) p.set(k, OWN.filter[k]);
+    if (OWN.q) p.set('q', OWN.q);
+    p.set('offset', String(offset));
+    p.set('limit', String(limit));
+    return p.toString();
+  }
+  /** The applied filter in the plan/live-check body shape (arrays of strings, q string). */
+  function ownFilterBody() {
+    const f = {};
+    for (const k of OWN_FILTERS) if (OWN.filter[k]) f[k] = [OWN.filter[k]];
+    if (OWN.q) f.q = OWN.q;
+    return f;
+  }
+
+  // ---- items table
+  async function ownLoadItems(offset) {
+    const seq = ++OWN.loadSeq;
+    const tbody = $('own-tbody');
+    try {
+      const r = await api('GET', ownPath('/items?' + ownQuery(offset, OWN_PAGE)));
+      if (seq !== OWN.loadSeq || S.view !== 'ownership') return;
+      OWN.items = objList(r && r.items);
+      OWN.total = Number(r && r.total) || 0;
+      OWN.offset = Number(r && r.offset) || 0;
+      if (OWN.offset > 0 && OWN.offset >= OWN.total) return ownLoadItems(Math.max(0, OWN.total - OWN_PAGE));
+      ownRenderItems();
+    } catch (e) {
+      if (seq !== OWN.loadSeq) return;
+      clear(tbody);
+      tbody.append(el('tr', null, el('td', { colspan: 8, class: 'empty', text: 'فهرست سرویس‌ها بارگذاری نشد.' })));
+      if (e.status !== 404) ownHandleError(e);
+    }
+  }
+
+  function ownIsSelected(key) {
+    const s = OWN.sel;
+    return s.mode === 'filter' ? !s.exclude.has(key) : s.keys.has(key);
+  }
+  function ownSetSelected(key, on) {
+    const s = OWN.sel;
+    if (s.mode === 'filter') {
+      if (on) s.exclude.delete(key);
+      else s.exclude.add(key);
+    } else if (on) s.keys.add(key);
+    else s.keys.delete(key);
+  }
+  function ownSelCount() {
+    const s = OWN.sel;
+    return s.mode === 'filter' ? Math.max(0, s.total - s.exclude.size) : s.keys.size;
+  }
+  function ownClearSelection() {
+    OWN.sel = { mode: 'keys', keys: new Set() };
+  }
+
+  function ownRenderItems() {
+    const tbody = $('own-tbody');
+    clear(tbody);
+    for (const it of OWN.items) {
+      const key = String(it.key);
+      const checked = ownIsSelected(key);
+      const box = el('input', { type: 'checkbox', class: 'own-row-check', 'data-key': key, 'aria-label': 'انتخاب فاکتور ' + String(it.invoice_key || key) });
+      box.checked = checked;
+      const reasons = Array.isArray(it.reasons) ? it.reasons : [];
+      const fc = String(it.final_class || '');
+      tbody.append(el('tr', {
+        'data-key': key, 'data-final-class': fc, 'data-eligibility': String(it.eligibility || ''),
+        'data-review-state': String(it.review_state || ''), class: (checked ? 'is-selected' : '') + (it.viewed ? '' : ' is-unviewed'),
+      },
+      el('td', { class: 'own-check' }, box),
+      el('td', null,
+        el('button', { type: 'button', class: 'linkish mono', 'data-action': 'own-detail', 'data-key': key, 'data-testid': 'own-open-detail', text: String(it.invoice_key || key) }),
+        it.stale ? el('span', { class: 'pill pill-warn', text: 'کهنه' }) : null,
+        it.viewed ? null : el('span', { class: 'sr-only', text: ' (هنوز باز نشده)' })),
+      el('td', null, el('bdi', { dir: 'ltr', text: it.panel_code ? String(it.panel_code) : '—' })),
+      el('td', null, labelWithCode(ownLabel('status_class', it.status_class), it.status_raw || it.status_class)),
+      el('td', null, el('span', { class: 'badge own-elig-' + String(it.eligibility || ''), text: ownLabel('eligibility', it.eligibility) })),
+      el('td', null, el('span', { class: 'badge own-fc own-fc-' + fc, 'data-testid': 'own-final-class', text: ownLabel('final_class', fc) })),
+      el('td', null, el('span', { class: 'small', text: ownLabel('live_status', it.live_status || 'NOT_CHECKED') })),
+      el('td', { class: 'small' }, reasons.length
+        ? el('span', { title: reasons.map(ownReasonLabel).join('، ') }, ownReasonLabel(reasons[0]), reasons.length > 1 ? ' +' + fmtNum(reasons.length - 1) : '')
+        : '—')));
+    }
+    if (!OWN.items.length) tbody.append(el('tr', null, el('td', { colspan: 8, class: 'empty', text: 'سرویسی با این فیلتر وجود ندارد.' })));
+    renderPager($('own-pager'), OWN.total, OWN.offset, OWN_PAGE, (off) => ownLoadItems(off));
+    ownSyncSelection();
+  }
+
+  function ownSyncSelection() {
+    const n = ownSelCount();
+    const s = OWN.sel;
+    const info = $('own-sel-count');
+    info.setAttribute('data-count', String(n));
+    info.setAttribute('data-mode', s.mode);
+    if (s.mode === 'filter') {
+      info.textContent = 'همه ' + fmtNum(s.total) + ' نتیجه فیلترشده انتخاب شده است' +
+        (s.exclude.size ? ' (به‌جز ' + fmtNum(s.exclude.size) + ' مورد)' : '') + ' — ' + fmtNum(n) + ' مورد.';
+    } else {
+      info.textContent = n ? fmtNum(n) + ' مورد انتخاب شده است.' : 'هیچ موردی انتخاب نشده است.';
+    }
+    const all = $('own-select-filtered');
+    all.hidden = s.mode === 'filter' || OWN.total <= 0;
+    all.textContent = 'انتخاب همه ' + fmtNum(OWN.total) + ' نتیجه فیلترشده';
+    $('own-clear-sel').hidden = n === 0 && s.mode !== 'filter';
+    const page = $('own-check-page');
+    const onPage = OWN.items.map((it) => String(it.key));
+    const selOnPage = onPage.filter(ownIsSelected).length;
+    page.checked = onPage.length > 0 && selOnPage === onPage.length;
+    page.indeterminate = selOnPage > 0 && selOnPage < onPage.length;
+    page.disabled = onPage.length === 0;
+    const disabled = n === 0 || ownSealed();
+    for (const id of ['own-act-approve', 'own-act-reject', 'own-act-reset']) $(id).disabled = disabled;
+  }
+
+  function ownSelectionBody() {
+    const s = OWN.sel;
+    if (s.mode === 'filter') return { mode: 'filter', filter: s.filter, exclude_keys: [...s.exclude] };
+    return { mode: 'keys', keys: [...s.keys] };
+  }
+
+  // ---- detail dialog
+  async function ownOpenDetail(key, opener) {
+    const d = $('own-detail');
+    const body = $('own-detail-body');
+    clear(body);
+    body.append(el('p', { class: 'muted', text: 'در حال بارگذاری…' }));
+    OWN.detailOpener = opener || null;
+    if (typeof d.showModal === 'function' && !d.open) d.showModal();
+    $('own-detail-close').focus();
+    try {
+      const it = await api('GET', ownPath('/items/' + encodeURIComponent(key)));
+      ownRenderDetail(it);
+      const row = OWN.items.find((x) => String(x.key) === key);
+      if (row && !row.viewed) {
+        row.viewed = true;
+        const tr = $('own-tbody').querySelector('tr[data-key="' + CSS.escape(key) + '"]');
+        if (tr) tr.classList.remove('is-unviewed');
+      }
+    } catch (e) {
+      clear(body);
+      body.append(el('p', { class: 'field-error', text: e.message || 'جزئیات بارگذاری نشد.' }));
+      if (e.status === 401) return;
+    }
+  }
+  function ownCloseDetail() {
+    const d = $('own-detail');
+    if (d.open) d.close();
+  }
+
+  function ownRenderDetail(it) {
+    const body = $('own-detail-body');
+    clear(body);
+    $('own-detail-title').textContent = 'جزئیات سرویس — ' + String(it.invoice_key || it.key || '');
+    const ownr = it.owner && typeof it.owner === 'object' ? it.owner : null;
+    const orig = it.original_owner && typeof it.original_owner === 'object' ? it.original_owner : null;
+    const dl = el('dl', { class: 'kv-grid', 'data-testid': 'own-detail-kv' });
+    const pairs = [
+      ['شناسه فاکتور', el('bdi', { dir: 'ltr', class: 'mono', text: String(it.invoice_key || '—') })],
+      ['نتیجه نهایی', labelWithCode(ownLabel('final_class', it.final_class), it.final_class)],
+      ['تصمیم مبدل', labelWithCode(codeLabel(L.ownership_decisions, it.ownership_decision), it.ownership_decision)],
+      ['اطمینان', it.confidence === undefined || it.confidence === null ? '—' : String(it.confidence)],
+      ['قابلیت تصمیم', labelWithCode(ownLabel('eligibility', it.eligibility), it.eligibility)],
+      ['وضعیت بررسی', labelWithCode(ownLabel('review_state', it.review_state), it.review_state)],
+      ['مبنا', it.basis ? labelWithCode(ownLabel('basis', it.basis), it.basis) : '—'],
+      ['پنل', el('bdi', { dir: 'ltr', text: it.panel_code ? String(it.panel_code) : '—' })],
+      ['وضعیت فاکتور', labelWithCode(ownLabel('status_class', it.status_class), it.status_raw || it.status_class)],
+      ['وضعیت روی پنل', ownLabel('live_status', it.live_status || 'NOT_CHECKED') + (it.live_checked_at ? ' — ' + fmtWhen(it.live_checked_at) : '')],
+      ['مالک ثبت‌شده در فاکتور', ownr
+        ? el('span', null, el('bdi', { dir: 'ltr', class: 'mono', text: String(ownr.telegram_user_id) }), ownr.in_user_table ? ' (در جدول کاربران)' : ' (در جدول کاربران نیست)')
+        : '—'],
+    ];
+    if (orig) pairs.push(['مالک اولیه', el('bdi', { dir: 'ltr', class: 'mono', text: String(orig.telegram_user_id || stringify(orig)) })]);
+    if (it.batch_id) pairs.push(['دسته', el('bdi', { dir: 'ltr', class: 'mono', text: String(it.batch_id) })]);
+    if (it.stale) pairs.push(['هشدار', el('span', { class: 'warn-text', text: 'این تصمیم مربوط به نسخه قبلی رکورد است و معتبر صادر نمی‌شود.' })]);
+    for (const [k, v] of pairs) dl.append(el('dt', { text: k }), v instanceof Node ? el('dd', null, v) : el('dd', { text: v }));
+    body.append(dl);
+
+    const reasons = Array.isArray(it.reasons) ? it.reasons : [];
+    body.append(el('h3', { text: 'دلیل‌ها' }));
+    const rl = el('ul', { class: 'issue-list' });
+    if (!reasons.length) rl.append(el('li', { class: 'none', text: 'دلیلی ثبت نشده است.' }));
+    for (const r of reasons) rl.append(el('li', { 'data-code': String(r) }, el('span', { class: 'msg', text: ownReasonLabel(r) }), el('span', { class: 'error-code', text: String(r) })));
+    body.append(rl);
+
+    const ev = objList(it.evidence);
+    body.append(el('h3', { text: 'شواهد (' + fmtNum(ev.length) + ')' }));
+    if (ev.length) {
+      body.append(el('div', { class: 'table-wrap' }, el('table', { class: 'table table-compact', 'data-testid': 'own-detail-evidence' },
+        el('thead', null, el('tr', null, ['جدول', 'کلید', 'نقش', 'رابطه', 'دلیل', 'نوع'].map((h) => el('th', { scope: 'col', text: h })))),
+        el('tbody', null, ev.map((x) => el('tr', null,
+          el('td', null, el('bdi', { dir: 'ltr', class: 'mono', text: stringify(x.source_table) })),
+          el('td', null, el('bdi', { dir: 'ltr', class: 'mono', text: stringify(x.pk) })),
+          el('td', { text: stringify(x.role) || '—' }),
+          el('td', { text: stringify(x.relation) || '—' }),
+          el('td', { text: x.reason ? ownReasonLabel(x.reason) : '—' }),
+          el('td', null, el('bdi', { dir: 'ltr', text: stringify(x.type_raw) || '—' }))))))));
+    } else body.append(el('p', { class: 'muted small', text: 'شاهدی ثبت نشده است.' }));
+
+    const hist = objList(it.history);
+    body.append(el('h3', { text: 'تاریخچه تصمیم‌ها' }));
+    if (hist.length) {
+      body.append(el('ul', { class: 'issue-list', 'data-testid': 'own-detail-history' }, hist.map((h) => el('li', null,
+        el('span', { class: 'msg' },
+          ownLabel('action', h.action) + ': ' + ownLabel('review_state', h.from_state) + ' ← ' + ownLabel('review_state', h.to_state),
+          h.note ? el('span', { class: 'block small muted', text: String(h.note) }) : null),
+        el('span', { class: 'small muted', text: fmtWhen(h.at) })))));
+    } else body.append(el('p', { class: 'muted small', text: 'هنوز تصمیمی برای این سرویس ثبت نشده است.' }));
+  }
+
+  // ---- plan / commit
+  async function ownPlan(action, selection) {
+    clearError();
+    const req = { action, selection, note: $('own-note').value.trim() || null };
+    OWN.planReq = req;
+    const btns = ['own-act-approve', 'own-act-reject', 'own-act-reset'].map($);
+    btns.forEach((b) => { b.disabled = true; });
+    try {
+      const p = await api('POST', ownPath('/plan'), req);
+      OWN.plan = p;
+      ownShowPlan(p);
+    } catch (e) {
+      if (e.code === 'ownership.sealed') {
+        toast('تصمیم‌ها مهر و موم شده‌اند؛ تغییری ممکن نیست.');
+        ownLoadSummary();
+      } else ownHandleError(e);
+    } finally {
+      ownSyncSelection();
+    }
+  }
+
+  function ownRequiredCount(p) {
+    const c = obj(p.confirm);
+    const n = c.required_count !== undefined ? c.required_count : p.applicable;
+    return Number(n) || 0;
+  }
+
+  function ownShowPlan(p) {
+    const d = $('own-plan-dialog');
+    const action = String(p.action || (OWN.planReq && OWN.planReq.action) || '');
+    $('own-plan-title').textContent = 'تأیید: ' + ownLabel('action', action);
+    $('own-plan-attest').hidden = action !== 'APPROVE';
+    const ne = obj(p.not_eligible);
+    kvGrid($('own-plan-kv'), [
+      ['انتخاب‌شده', fmtNum(Number(p.selected) || 0)],
+      ['تغییر می‌کند', fmtNum(Number(p.applicable) || 0), 'ok-text'],
+      ['بدون تغییر (از قبل در همین وضعیت)', fmtNum(Number(p.unchanged) || 0)],
+      ['جایگزین‌شده با تصمیم بعدی (تغییر نمی‌کند)', Number(p.superseded) ? fmtNum(Number(p.superseded)) : undefined],
+      ['غیرقابل اعمال (کنار گذاشته می‌شود)', fmtNum(Number(ne.total) || 0), Number(ne.total) ? 'bad-text' : null],
+      ['مهلت این برنامه', p.expires_at ? fmtWhen(p.expires_at) : undefined],
+    ]);
+    $('own-plan-kv').querySelectorAll('dd')[1].setAttribute('data-testid', 'own-plan-applicable');
+
+    const nbox = $('own-plan-noteligible');
+    clear(nbox);
+    const byReason = obj(ne.by_reason);
+    if (Object.keys(byReason).length) {
+      nbox.append(el('h3', { text: 'دلیل غیرقابل اعمال بودن' }),
+        el('ul', { class: 'issue-list' }, Object.keys(byReason).map((k) => el('li', { 'data-code': k },
+          el('span', { class: 'msg', text: ownReasonLabel(k) }), el('span', { class: 'pill num', text: fmtNum(byReason[k]) + ' مورد' }),
+          el('span', { class: 'error-code', text: k })))));
+    }
+
+    const rbox = $('own-plan-risks');
+    clear(rbox);
+    const risks = objList(p.risks);
+    if (risks.length) {
+      const sevFa = { high: 'ریسک بالا', medium: 'ریسک متوسط', info: 'اطلاع' };
+      rbox.append(el('h3', { text: 'ریسک‌ها' }),
+        el('ul', { class: 'issue-list own-risks', 'data-testid': 'own-plan-risks' }, risks.map((r) => el('li', { class: 'own-risk sev-' + String(r.severity || 'info'), 'data-code': String(r.code) },
+          el('span', { class: 'badge own-sev own-sev-' + String(r.severity || 'info'), text: sevFa[r.severity] || String(r.severity || '') }),
+          el('span', { class: 'msg', text: ownLabel('risk', r.code) }),
+          r.count !== undefined && r.count !== null ? el('span', { class: 'pill num', text: fmtNum(r.count) + ' مورد' }) : null,
+          el('span', { class: 'error-code', text: String(r.code) })))));
+    }
+
+    const ubox = $('own-plan-unreviewed');
+    clear(ubox);
+    const un = obj(p.unreviewed);
+    if (Number(un.count)) {
+      const samples = objList(un.samples);
+      ubox.append(el('h3', { text: fmtNum(Number(un.count)) + ' مورد هرگز باز نشده است' }),
+        el('p', { class: 'muted small', text: 'پیشنهاد می‌شود چند نمونه را پیش از ثبت بررسی کنید.' }));
+      if (samples.length) {
+        ubox.append(el('div', { class: 'table-wrap' }, el('table', { class: 'table table-compact', 'data-testid': 'own-plan-samples' },
+          el('thead', null, el('tr', null, ['شناسه فاکتور', 'پنل', 'وضعیت فاکتور', 'دلیل'].map((h) => el('th', { scope: 'col', text: h })))),
+          el('tbody', null, samples.map((s) => el('tr', null,
+            el('td', null, el('bdi', { dir: 'ltr', class: 'mono', text: String(s.invoice_key || s.key || '') })),
+            el('td', null, el('bdi', { dir: 'ltr', text: s.panel_code ? String(s.panel_code) : '—' })),
+            el('td', { text: ownLabel('status_class', s.status_class) }),
+            el('td', { class: 'small', text: (Array.isArray(s.reasons) ? s.reasons : []).map(ownReasonLabel).join('، ') || '—' })))))));
+      }
+    }
+
+    const need = ownRequiredCount(p);
+    $('own-plan-error').hidden = true;
+    $('own-plan-replan').hidden = true;
+    $('own-plan-confirm').hidden = need <= 0;
+    $('own-plan-count').value = '';
+    $('own-plan-count').removeAttribute('aria-invalid');
+    $('own-plan-ack').checked = false;
+    $('own-plan-count-label').textContent = 'برای تأیید، تعداد مواردی را که تغییر می‌کنند (' + fmtNum(need) + ') تایپ کنید';
+    $('own-plan-ack-text').textContent = action === 'APPROVE'
+      ? 'می‌دانم این تأیید مدیر است، مالکیت را اثبات نمی‌کند و جدا از موارد اثبات‌شده نگه داشته می‌شود.'
+      : 'پیامد این اقدام را خواندم و آن را تأیید می‌کنم.';
+    const commit = $('own-plan-commit');
+    commit.textContent = need > 0 ? 'ثبت نهایی ' + fmtNum(need) + ' مورد' : 'موردی برای تغییر نیست';
+    commit.className = 'btn ' + (action === 'REJECT' ? 'btn-danger' : 'btn-primary');
+    commit.hidden = need <= 0;
+    ownSyncCommit();
+    if (typeof d.showModal === 'function' && !d.open) d.showModal();
+    (need > 0 ? $('own-plan-count') : $('own-plan-cancel')).focus({ preventScroll: true });
+    d.scrollTop = 0;
+  }
+
+  function ownSyncCommit() {
+    const p = OWN.plan;
+    const need = p ? ownRequiredCount(p) : 0;
+    const typed = latinDigits($('own-plan-count').value);
+    const ok = need > 0 && /^\d+$/.test(typed) && Number(typed) === need && $('own-plan-ack').checked;
+    $('own-plan-commit').disabled = !ok;
+  }
+
+  function ownClosePlan() {
+    const d = $('own-plan-dialog');
+    if (d.open) d.close();
+    OWN.plan = null;
+  }
+
+  async function ownCommit() {
+    const p = OWN.plan;
+    if (!p) return;
+    const need = ownRequiredCount(p);
+    const typed = latinDigits($('own-plan-count').value);
+    if (!/^\d+$/.test(typed) || Number(typed) !== need || !$('own-plan-ack').checked) return;
+    const btn = $('own-plan-commit');
+    btn.disabled = true;
+    const err = $('own-plan-error');
+    err.hidden = true;
+    try {
+      const r = await api('POST', ownPath('/commit'), { plan_id: p.plan_id, confirm_count: Number(typed), acknowledge: true });
+      ownClosePlan();
+      $('own-note').value = '';
+      ownClearSelection();
+      toast(ownLabel('action', r.action) + ': ' + fmtNum(Number(r.applied) || 0) + ' مورد اعمال شد' +
+        (Number(r.unchanged) ? '، ' + fmtNum(r.unchanged) + ' مورد بدون تغییر' : '') +
+        (Number(r.superseded) ? '، ' + fmtNum(r.superseded) + ' مورد به‌دلیل تصمیم بعدی تغییر نکرد' : '') + '.');
+      ownRefreshAll();
+    } catch (e) {
+      if (e.status === 401) return;
+      err.textContent = '';
+      if (e.code === 'ownership.plan_stale' || e.code === 'ownership.plan_expired') {
+        err.textContent = (e.code === 'ownership.plan_stale'
+          ? 'برخی موارد پس از این برنامه تغییر کرده‌اند.'
+          : 'مهلت این برنامه تمام شده است.') + ' لطفاً «برنامه‌ریزی دوباره» را بزنید و نتیجه تازه را بررسی کنید.';
+        $('own-plan-replan').hidden = false;
+        $('own-plan-commit').hidden = true;
+      } else if (e.code === 'ownership.confirm_mismatch') {
+        err.textContent = 'تعداد واردشده با تعداد مواردی که تغییر می‌کنند برابر نیست.';
+        $('own-plan-count').setAttribute('aria-invalid', 'true');
+        $('own-plan-count').focus();
+      } else if (e.code === 'ownership.sealed') {
+        err.textContent = 'تصمیم‌ها مهر و موم شده‌اند؛ تغییری ممکن نیست.';
+        ownLoadSummary();
+      } else {
+        err.textContent = e.message || 'ثبت انجام نشد.';
+      }
+      err.append(' ', el('span', { class: 'error-code', text: e.code || '' }));
+      err.hidden = false;
+      ownSyncCommit();
+    }
+  }
+
+  async function ownReplan() {
+    const req = OWN.planReq;
+    if (!req) return ownClosePlan();
+    try {
+      const p = await api('POST', ownPath('/plan'), req);
+      OWN.plan = p;
+      ownShowPlan(p);
+    } catch (e) {
+      ownClosePlan();
+      ownHandleError(e);
+    }
+  }
+
+  // ---- batches / audit
+  async function ownLoadBatches() {
+    const tbody = $('own-batches-tbody');
+    try {
+      const r = await api('GET', ownPath('/batches'));
+      clear(tbody);
+      const items = objList(r && r.items);
+      for (const b of items) {
+        const canUndo = b.action !== 'UNDO' && !b.undone_by && !ownSealed();
+        tbody.append(el('tr', { 'data-batch': String(b.batch_id), 'data-action': String(b.action) },
+          el('td', { class: 'small', text: fmtWhen(b.created_at) }),
+          el('td', null, ownLabel('action', b.action),
+            b.undone_by ? el('span', { class: 'block small muted', text: 'بازگردانده شد' }) : null,
+            b.undo_of ? el('span', { class: 'block small muted ltr-text', text: 'بازگرداندن ' + String(b.undo_of).slice(0, 12) }) : null),
+          el('td', { class: 'num', text: fmtNum(Number(b.applied) || 0) }),
+          el('td', { class: 'num', text: fmtNum(Number(b.unchanged) || 0) + (Number(b.superseded) ? ' / ' + fmtNum(b.superseded) : '') }),
+          el('td', { class: 'small', text: b.note ? truncate(b.note, 60) : '—' }),
+          el('td', null, canUndo ? el('button', { type: 'button', class: 'btn btn-ghost btn-sm', 'data-action': 'own-undo', 'data-batch': String(b.batch_id), 'data-testid': 'own-undo', text: 'بازگرداندن' }) : null)));
+      }
+      if (!items.length) tbody.append(el('tr', null, el('td', { colspan: 6, class: 'empty', text: 'هنوز دسته‌ای ثبت نشده است.' })));
+    } catch (e) {
+      if (e.status !== 404) ownHandleError(e);
+    }
+  }
+
+  async function ownLoadAudit() {
+    const tbody = $('own-audit-tbody');
+    try {
+      // newest first (server order)
+      const r = await api('GET', ownPath('/audit?offset=0&limit=20'));
+      clear(tbody);
+      const items = objList(r && r.items);
+      for (const a of items) {
+        tbody.append(el('tr', null,
+          el('td', { class: 'num', text: fmtNum(a.seq) }),
+          el('td', { text: fmtWhen(a.at) }),
+          el('td', { text: ownLabel('action', a.action) }),
+          el('td', { class: 'ltr', text: a.key ? String(a.key) : '—' }),
+          el('td', { text: a.from_state ? ownLabel('review_state', a.from_state) : '—' }),
+          el('td', { text: a.to_state ? ownLabel('review_state', a.to_state) : '—' })));
+      }
+      if (!items.length) tbody.append(el('tr', null, el('td', { colspan: 6, class: 'empty', text: 'رویدادی ثبت نشده است.' })));
+    } catch (e) {
+      if (e.status !== 404) ownHandleError(e);
+    }
+  }
+
+  async function ownVerifyAudit() {
+    const out = $('own-audit-result');
+    try {
+      const r = await api('GET', ownPath('/audit/verify'));
+      out.className = 'small ' + (r.ok ? 'ok-text' : 'bad-text');
+      out.setAttribute('data-ok', r.ok ? 'true' : 'false');
+      clear(out);
+      out.append(r.ok ? 'زنجیره رویدادها سالم است' : 'زنجیره رویدادها دست‌کاری شده یا ناقص است!',
+        ' — ' + fmtNum(Number(r.events) || 0) + ' رویداد. سر زنجیره: ',
+        el('bdi', { dir: 'ltr', class: 'mono', text: r.head ? String(r.head) : '—' }));
+      out.hidden = false;
+    } catch (e) {
+      ownHandleError(e);
+    }
+  }
+
+  // ---- seal
+  function ownOpenSeal() {
+    const total = Number(obj(OWN.summary && OWN.summary.totals).items) || 0;
+    const t = obj(OWN.summary && OWN.summary.totals);
+    $('own-seal-text').textContent = 'پس از مهر و موم، تصمیم‌های ' + fmtNum(total) + ' سرویس قطعی می‌شود و دیگر قابل تغییر یا بازگرداندن نیست. ' +
+      fmtNum(Number(t.PENDING) || 0) + ' مورد هنوز «در انتظار تصمیم» است و در خروجی به همین شکل می‌ماند.';
+    $('own-seal-count-label').textContent = 'تعداد کل سرویس‌ها (' + fmtNum(total) + ') را تایپ کنید';
+    $('own-seal-word').value = '';
+    $('own-seal-count').value = '';
+    $('own-seal-error').hidden = true;
+    ownSyncSeal();
+    const d = $('own-seal-dialog');
+    if (typeof d.showModal === 'function' && !d.open) d.showModal();
+    $('own-seal-word').focus();
+  }
+  function ownSyncSeal() {
+    const total = Number(obj(OWN.summary && OWN.summary.totals).items) || 0;
+    const c = latinDigits($('own-seal-count').value);
+    $('own-seal-ok').disabled = !($('own-seal-word').value.trim() === 'SEAL' && /^\d+$/.test(c) && Number(c) === total);
+  }
+  async function ownSeal() {
+    const c = Number(latinDigits($('own-seal-count').value));
+    $('own-seal-ok').disabled = true;
+    try {
+      const s = await api('POST', ownPath('/seal'), { confirm: 'SEAL', confirm_count: c });
+      const d = $('own-seal-dialog');
+      if (d.open) d.close();
+      if (s && s.totals) OWN.summary = s;
+      ownRenderSummary();
+      toast('تصمیم‌های مالکیت مهر و موم شد.');
+      ownRefreshAll();
+    } catch (e) {
+      if (e.status === 401) return;
+      const err = $('own-seal-error');
+      clear(err);
+      err.append(e.message || 'مهر و موم انجام نشد.', ' ', el('span', { class: 'error-code', text: e.code || '' }));
+      err.hidden = false;
+      ownSyncSeal();
+    }
+  }
+
+  // ---- export (fetch + blob download, so a 404 can ask for the passphrase)
+  async function ownDownload(method, path, body) {
+    const headers = { Accept: 'application/json' };
+    const init = { method, headers, credentials: 'same-origin', cache: 'no-store' };
+    if (method !== 'GET') headers['X-CSRF-Token'] = S.csrf || '';
+    if (body !== undefined) {
+      headers['Content-Type'] = 'application/json';
+      init.body = JSON.stringify(body);
+    }
+    let res;
+    try {
+      res = await fetch(path, init);
+    } catch (_) {
+      throw new ApiError(0, 'network', NETWORK_MSG, null, true);
+    } finally {
+      init.body = null;
+    }
+    if (!res.ok) {
+      let data = null;
+      try {
+        data = await res.json();
+      } catch (_) {
+        data = null;
+      }
+      const e = errorFromPayload(res.status, data);
+      if (res.status === 401) showFatal(e);
+      throw e;
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get('Content-Disposition') || '';
+    const m = /filename="?([^";]+)"?/i.exec(cd);
+    const name = m ? m[1] : 'ownership-decisions.json';
+    const url = URL.createObjectURL(blob);
+    const a = el('a', { href: url, download: name, hidden: true });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  }
+  async function ownExport() {
+    try {
+      await ownDownload('GET', ownPath('/export.json'));
+      toast('فایل تصمیم‌ها دانلود شد.');
+    } catch (e) {
+      if (e.code === 'ownership.export_needs_passphrase') {
+        $('own-export-pass-form').hidden = false;
+        $('own-export-pass').focus();
+      } else if (e.status !== 401) showError(e);
+    }
+  }
+  async function ownExportWithPass(ev) {
+    ev.preventDefault();
+    const input = $('own-export-pass');
+    const passphrase = input.value;
+    input.value = '';
+    if (!passphrase) return input.focus();
+    try {
+      await ownDownload('POST', ownPath('/export'), { passphrase });
+      $('own-export-pass-form').hidden = true;
+      toast('فایل تصمیم‌ها دانلود شد.');
+    } catch (e) {
+      if (e.status !== 401) showError(e);
+    }
+  }
+
+  // ---- read-only live panel check
+  function ownStopLivePoll() {
+    clearTimeout(OWN.livePoll);
+    OWN.livePoll = null;
+  }
+  async function ownLoadLive() {
+    ownStopLivePoll();
+    let st;
+    try {
+      st = await api('GET', ownPath('/live-check'));
+    } catch (e) {
+      if (e.status !== 404) ownHandleError(e);
+      $('own-live-off').hidden = false;
+      $('own-live-form').hidden = true;
+      return;
+    }
+    ownRenderLive(st || {});
+    if (st && st.running && S.view === 'ownership') OWN.livePoll = setTimeout(ownLoadLive, 1000);
+    else if (st && st.finished_at && OWN.liveWasRunning) {
+      OWN.liveWasRunning = false;
+      ownLoadSummary();
+      ownLoadFacets();
+      ownLoadItems(OWN.offset);
+    }
+  }
+  function ownRenderLive(st) {
+    const enabled = !!st.enabled;
+    $('own-live-off').hidden = enabled;
+    $('own-live-form').hidden = !enabled;
+    const running = !!st.running;
+    OWN.liveWasRunning = OWN.liveWasRunning || running;
+    $('own-live-start').disabled = running;
+    $('own-live-cancel').hidden = !running;
+    const total = Number(st.total) || 0;
+    const done = Number(st.done) || 0;
+    const show = enabled && (running || total > 0 || st.error);
+    $('own-live-progress').hidden = !show;
+    if (!show) return;
+    const pct = total ? (done / total) * 100 : 0;
+    setProgress('own-live-bar', 'own-live-fill', pct, { indeterminate: running && !total, ok: !running && !st.error && total > 0, bad: !!st.error });
+    const parts = [(running ? 'در حال بررسی' : 'بررسی پایان یافت') + (st.panel_code ? ' (پنل ' + String(st.panel_code) + ')' : '') + ': ' +
+      fmtNum(done) + ' از ' + fmtNum(total)];
+    const by = obj(st.by_status);
+    const keys = Object.keys(by);
+    if (keys.length) parts.push(keys.map((k) => ownLabel('live_status', k) + ' ' + fmtNum(by[k])).join('، '));
+    if (st.error) parts.push((st.error.code === 'panel.cancelled' ? '' : 'خطا: ') + String(st.error.message || st.error.code || st.error));
+    $('own-live-text').textContent = parts.join(' — ');
+  }
+  async function ownLiveStart(ev) {
+    ev.preventDefault();
+    const panel = $('own-live-panel').value;
+    const base = $('own-live-url').value.trim();
+    const user = $('own-live-user');
+    const pass = $('own-live-pass');
+    const body = {
+      panel_code: panel,
+      base_url: base,
+      username: user.value,
+      password: pass.value,
+      selection: { mode: 'filter', filter: Object.assign(ownFilterBody(), { panel: [panel] }), exclude_keys: [] },
+    };
+    // Credentials leave the DOM immediately and are never stored by the page.
+    user.value = '';
+    pass.value = '';
+    if (!panel || !base || !body.username || !body.password) {
+      body.password = null;
+      showError({ code: 'live_check.input', message: 'کد پنل، نشانی، نام کاربری و رمز مدیر پنل را کامل وارد کنید.' });
+      return;
+    }
+    try {
+      await api('POST', ownPath('/live-check'), body);
+      OWN.liveWasRunning = true;
+      toast('بررسی فقط‌خواندنی پنل شروع شد.');
+      ownLoadLive();
+    } catch (e) {
+      ownHandleError(e);
+    } finally {
+      body.password = null;
+      body.username = null;
+    }
+  }
+  async function ownLiveCancel() {
+    try {
+      await api('POST', ownPath('/live-check/cancel'));
+      ownLoadLive();
+    } catch (e) {
+      ownHandleError(e);
+    }
+  }
+
+  function wireOwnership() {
+    $('own-refresh').addEventListener('click', () => onShow.ownership());
+    $('own-filters').addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      ownReadFilters();
+      ownClearSelection();
+      ownLoadItems(0);
+    });
+    $('own-reset-filters').addEventListener('click', () => {
+      for (const k of OWN_FILTERS) $('own-f-' + k).value = '';
+      $('own-q').value = '';
+      ownReadFilters();
+      ownClearSelection();
+      ownLoadItems(0);
+    });
+    $('own-tbody').addEventListener('change', (ev) => {
+      const box = ev.target.closest('.own-row-check');
+      if (!box) return;
+      ownSetSelected(box.dataset.key, box.checked);
+      const tr = box.closest('tr');
+      if (tr) tr.classList.toggle('is-selected', box.checked);
+      ownSyncSelection();
+    });
+    $('own-tbody').addEventListener('click', (ev) => {
+      const b = ev.target.closest('[data-action="own-detail"]');
+      if (b) return ownOpenDetail(b.dataset.key, b);
+      if (ev.target.closest('input, button, a, label')) return;
+      const tr = ev.target.closest('tr[data-key]');
+      if (tr) ownOpenDetail(tr.dataset.key, tr.querySelector('[data-action="own-detail"]'));
+    });
+    $('own-check-page').addEventListener('change', (ev) => {
+      const on = ev.target.checked;
+      for (const it of OWN.items) ownSetSelected(String(it.key), on);
+      $('own-tbody').querySelectorAll('.own-row-check').forEach((b) => {
+        b.checked = on;
+        const tr = b.closest('tr');
+        if (tr) tr.classList.toggle('is-selected', on);
+      });
+      ownSyncSelection();
+    });
+    $('own-select-filtered').addEventListener('click', () => {
+      OWN.sel = { mode: 'filter', filter: ownFilterBody(), exclude: new Set(), total: OWN.total };
+      ownRenderItems();
+      $('own-clear-sel').focus();
+    });
+    $('own-clear-sel').addEventListener('click', () => {
+      ownClearSelection();
+      ownRenderItems();
+    });
+    for (const id of ['own-act-approve', 'own-act-reject', 'own-act-reset']) {
+      $(id).addEventListener('click', () => {
+        if (!ownSelCount() || ownSealed()) return;
+        ownPlan($(id).dataset.action, ownSelectionBody());
+      });
+    }
+    $('own-batches-tbody').addEventListener('click', (ev) => {
+      const b = ev.target.closest('[data-action="own-undo"]');
+      if (b) ownPlan('UNDO', { mode: 'batch', batch_id: b.dataset.batch });
+    });
+    // plan dialog
+    $('own-plan-form').addEventListener('submit', (ev) => ev.preventDefault());
+    $('own-plan-count').addEventListener('input', () => {
+      $('own-plan-count').removeAttribute('aria-invalid');
+      ownSyncCommit();
+    });
+    $('own-plan-count').addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') ev.preventDefault();
+    });
+    $('own-plan-ack').addEventListener('change', ownSyncCommit);
+    $('own-plan-commit').addEventListener('click', ownCommit);
+    $('own-plan-replan').addEventListener('click', ownReplan);
+    $('own-plan-cancel').addEventListener('click', ownClosePlan);
+    $('own-plan-dialog').addEventListener('close', () => {
+      OWN.plan = null;
+    });
+    // detail dialog
+    $('own-detail-close').addEventListener('click', ownCloseDetail);
+    $('own-detail').addEventListener('close', () => {
+      const o = OWN.detailOpener;
+      OWN.detailOpener = null;
+      if (o && o.isConnected && typeof o.focus === 'function') o.focus();
+    });
+    // audit / seal / export / live
+    $('own-audit-verify').addEventListener('click', ownVerifyAudit);
+    $('own-seal').addEventListener('click', () => {
+      if (!ownSealed()) ownOpenSeal();
+    });
+    $('own-seal-form').addEventListener('submit', (ev) => ev.preventDefault());
+    $('own-seal-word').addEventListener('input', ownSyncSeal);
+    $('own-seal-count').addEventListener('input', ownSyncSeal);
+    $('own-seal-ok').addEventListener('click', ownSeal);
+    $('own-seal-cancel').addEventListener('click', () => $('own-seal-dialog').close());
+    $('own-export').addEventListener('click', ownExport);
+    $('own-export-pass-form').addEventListener('submit', ownExportWithPass);
+    $('own-live-form').addEventListener('submit', ownLiveStart);
+    $('own-live-cancel').addEventListener('click', ownLiveCancel);
+    $('own-live-settings').addEventListener('click', () => go('settings'));
+  }
+
   // ------------------------------------------------------------------ settings
   const SETTINGS_FIELDS = [
     { key: 'max_archive_mb', label: 'حداکثر حجم فایل ZIP', unit: 'مگابایت', min: 1, max: 65536, def: 4096,
@@ -2154,7 +3121,12 @@
       help: 'صفر یعنی هیچ تاریخچه‌ای ثبت نشود. تاریخچه فقط آمار کلی را نگه می‌دارد.' },
     { key: 'delete_sql_after_parse', label: 'حذف فوری فایل‌های SQL استخراج‌شده پس از خواندن', type: 'bool', def: true,
       help: 'توصیه می‌شود فعال بماند تا داده خام مشتریان کمترین زمان ممکن روی دیسک بماند.' },
+    { key: 'panel_live_check_enabled', label: 'اجازه بررسی فقط‌خواندنی وضعیت سرویس‌ها روی پنل', type: 'bool', def: false, optional: true,
+      warn: 'هشدار: با روشن کردن این گزینه، صفحه «بررسی مالکیت سرویس‌ها» می‌تواند با اطلاعات ورودی که خودتان وارد می‌کنید به پنل وصل شود. این بررسی فقط وضعیت سرویس را می‌خواند و هرگز سرویسی را ایجاد، تمدید، غیرفعال یا حذف نمی‌کند. اطلاعات ورود پنل ذخیره نمی‌شود.',
+      help: 'به‌طور پیش‌فرض خاموش است. وضعیت روی پنل فقط نشانه ریسک است و مالکیت را اثبات نمی‌کند.' },
   ];
+  // An optional field is shown and sent only when the server's settings know the key.
+  const settingKnown = (f) => !f.optional || !!(S.settings && Object.prototype.hasOwnProperty.call(S.settings, f.key));
 
   function buildSettingsForm() {
     const box = $('settings-fields');
@@ -2167,10 +3139,12 @@
       const err = el('p', { class: 'field-error', id: errId, role: 'alert', hidden: true });
       let field;
       if (f.type === 'bool') {
-        field = el('div', { class: 'field' },
+        const warnId = id + '-warn';
+        field = el('div', { class: 'field', id: id + '-field', hidden: !!f.optional },
           el('label', { class: 'check-row', for: id },
-            el('input', { type: 'checkbox', id, 'data-testid': 'setting-' + f.key, 'aria-describedby': helpId }),
+            el('input', { type: 'checkbox', id, 'data-testid': 'setting-' + f.key, 'aria-describedby': helpId + (f.warn ? ' ' + warnId : '') }),
             el('span', { text: f.label })),
+          f.warn ? el('p', { class: 'help warn-text', id: warnId, text: f.warn }) : null,
           help, err);
       } else {
         const input = el('input', {
@@ -2190,6 +3164,7 @@
   function fillSettings(s) {
     for (const f of SETTINGS_FIELDS) {
       const n = $('set-' + f.key);
+      if (f.optional) $('set-' + f.key + '-field').hidden = !settingKnown(f);
       if (f.type === 'bool') n.checked = !!s[f.key];
       else if (f.type === 'text') n.value = s[f.key] || '';
       else n.value = s[f.key] === undefined || s[f.key] === null ? '' : faDigits(s[f.key]);
@@ -2215,6 +3190,7 @@
     let bad = null;
     for (const f of SETTINGS_FIELDS) {
       const n = $('set-' + f.key);
+      if (!settingKnown(f)) continue;
       if (f.type === 'bool') body[f.key] = n.checked;
       else if (f.type === 'text') body[f.key] = n.value.trim();
       else {
@@ -2355,6 +3331,7 @@
       toast('کلید را در مکانی امن و جدا از بسته ذخیره کنید.');
     });
     $('history-clear').addEventListener('click', clearHistory);
+    wireOwnership();
     buildSettingsForm();
     $('settings-form').addEventListener('submit', saveSettings);
     $('settings-defaults').addEventListener('click', () => {

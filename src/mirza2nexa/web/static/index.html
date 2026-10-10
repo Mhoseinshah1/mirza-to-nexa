@@ -45,6 +45,7 @@
         <li><button type="button" class="nav-item" data-view="status" data-testid="nav-status"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3a9 9 0 1 0 9 9h-2a7 7 0 1 1-7-7zm-1 4v6l5 3 .8-1.3-4.3-2.5V7z"/></svg><span>وضعیت تبدیل</span><span class="nav-badge" id="nav-status-badge" hidden></span></button></li>
         <li><button type="button" class="nav-item" data-view="report" data-testid="nav-report"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9h3v10H5zm5.5-4h3v14h-3zM16 13h3v6h-3z"/></svg><span>آمار و گزارش</span></button></li>
         <li><button type="button" class="nav-item" data-view="readiness" data-testid="nav-readiness"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 3 6v6c0 5.2 3.8 9.4 9 10 5.2-.6 9-4.8 9-10V6zm-1.2 14.2-3.5-3.5 1.4-1.4 2.1 2.1 4.9-4.9 1.4 1.4z"/></svg><span>آمادگی مهاجرت به NEXA</span></button></li>
+        <li><button type="button" class="nav-item" data-view="ownership" data-testid="nav-ownership"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0 2c-3.3 0-8 1.7-8 5v1h9.3a6 6 0 0 1-.3-2 6 6 0 0 1 1.1-3.5A12 12 0 0 0 12 14zm6 0-1.4 1.4 1.1 1.1H14v2h3.7l-1.1 1.1L18 23l3.5-3.5z"/></svg><span>بررسی مالکیت سرویس‌ها</span></button></li>
         <li><button type="button" class="nav-item" data-view="coverage" data-testid="nav-coverage"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h18v4H3zm0 7h8v11H3zm10 0h8v4h-8zm0 7h8v4h-8z"/></svg><span>پوشش جدول‌ها</span></button></li>
         <li><button type="button" class="nav-item" data-view="review" data-testid="nav-review"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v2H3zm0 6h12v2H3zm0 6h18v2H3z"/></svg><span>صف بررسی</span></button></li>
         <li><button type="button" class="nav-item" data-view="preview" data-testid="nav-preview"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5C6 5 2 12 2 12s4 7 10 7 10-7 10-7-4-7-10-7zm0 11a4 4 0 1 1 0-8 4 4 0 0 1 0 8z"/></svg><span>پیش‌نمایش خروجی</span></button></li>
@@ -417,6 +418,181 @@
       </div>
     </section>
 
+    <!-- 4a2. Bulk ownership review -->
+    <section class="view" id="view-ownership" data-view-name="ownership" aria-labelledby="h-ownership" hidden>
+      <header class="view-head">
+        <div>
+          <h1 id="h-ownership">بررسی مالکیت سرویس‌ها</h1>
+          <p class="muted">تعیین تکلیف گروهی سرویس‌هایی که مالک آن‌ها با شواهد بکاپ اثبات نشده است. هیچ سرویسی روی پنل ساخته، تمدید، غیرفعال یا حذف نمی‌شود.</p>
+        </div>
+        <div class="actions head-actions">
+          <button type="button" class="btn btn-ghost" id="own-refresh" data-testid="own-refresh">به‌روزرسانی</button>
+        </div>
+      </header>
+      <div class="empty card" id="own-empty">بررسی مالکیت پس از کامل شدن تبدیل در دسترس است.</div>
+      <div id="own-body" hidden>
+        <div class="own-sealed" id="own-sealed" data-testid="own-sealed" role="status" hidden></div>
+        <div class="card importer-warning" id="own-disclaimer" data-testid="own-disclaimer" role="note">
+          <strong>تأیید مدیر، اثبات مالکیت نیست.</strong>
+          <span id="own-disclaimer-text"></span>
+        </div>
+        <div class="stat-grid own-summary" id="own-summary" data-testid="own-summary" aria-live="polite"></div>
+        <p class="muted small" id="own-summary-meta"></p>
+
+        <form class="card filters" id="own-filters" data-testid="own-filters" novalidate>
+          <div class="field inline">
+            <label for="own-f-final_class">نتیجه نهایی</label>
+            <select id="own-f-final_class" data-filter="final_class" data-testid="own-f-final_class"></select>
+          </div>
+          <div class="field inline">
+            <label for="own-f-eligibility">قابلیت تصمیم</label>
+            <select id="own-f-eligibility" data-filter="eligibility" data-testid="own-f-eligibility"></select>
+          </div>
+          <div class="field inline">
+            <label for="own-f-review_state">وضعیت بررسی</label>
+            <select id="own-f-review_state" data-filter="review_state" data-testid="own-f-review_state"></select>
+          </div>
+          <div class="field inline">
+            <label for="own-f-panel">پنل</label>
+            <select id="own-f-panel" data-filter="panel" data-testid="own-f-panel"></select>
+          </div>
+          <div class="field inline">
+            <label for="own-f-status_class">وضعیت فاکتور</label>
+            <select id="own-f-status_class" data-filter="status_class" data-testid="own-f-status_class"></select>
+          </div>
+          <div class="field inline">
+            <label for="own-f-reason">دلیل</label>
+            <select id="own-f-reason" data-filter="reason" data-testid="own-f-reason"></select>
+          </div>
+          <div class="field inline">
+            <label for="own-f-live_status">وضعیت روی پنل</label>
+            <select id="own-f-live_status" data-filter="live_status" data-testid="own-f-live_status"></select>
+          </div>
+          <div class="field inline">
+            <label for="own-q">شناسه فاکتور</label>
+            <input type="text" id="own-q" data-testid="own-q" dir="ltr" spellcheck="false" autocomplete="off" placeholder="ابتدای شناسه">
+          </div>
+          <div class="actions own-filter-actions">
+            <button type="submit" class="btn btn-secondary" data-testid="own-apply">اعمال فیلتر</button>
+            <button type="button" class="btn btn-ghost" id="own-reset-filters" data-testid="own-reset-filters">حذف فیلترها</button>
+          </div>
+        </form>
+
+        <div class="card">
+          <div class="own-selbar" role="group" aria-label="انتخاب و اقدام گروهی">
+            <div class="own-selinfo">
+              <span id="own-sel-count" data-testid="own-sel-count" aria-live="polite">هیچ موردی انتخاب نشده است.</span>
+              <button type="button" class="btn btn-ghost btn-sm" id="own-select-filtered" data-testid="own-select-filtered" hidden></button>
+              <button type="button" class="btn btn-ghost btn-sm" id="own-clear-sel" data-testid="own-clear-sel" hidden>لغو انتخاب</button>
+            </div>
+            <div class="own-actions">
+              <label class="sr-only" for="own-note">یادداشت دسته (اختیاری)</label>
+              <input type="text" id="own-note" data-testid="own-note" maxlength="200" autocomplete="off" placeholder="یادداشت (اختیاری؛ اطلاعات مشتری ننویسید)">
+              <button type="button" class="btn btn-primary" id="own-act-approve" data-action="APPROVE" data-testid="own-act-approve" disabled>تأیید مالک ثبت‌شده در فاکتور</button>
+              <button type="button" class="btn btn-danger" id="own-act-reject" data-action="REJECT" data-testid="own-act-reject" disabled>رد و انتقال به قرنطینه</button>
+              <button type="button" class="btn btn-ghost" id="own-act-reset" data-action="RESET" data-testid="own-act-reset" disabled>بازگشت به در انتظار</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="table own-table" id="own-table" data-testid="own-table">
+              <caption class="sr-only">سرویس‌ها برای بررسی مالکیت؛ برای دیدن جزئیات، شناسه فاکتور را انتخاب کنید.</caption>
+              <thead><tr>
+                <th scope="col" class="own-check"><input type="checkbox" id="own-check-page" data-testid="own-check-page" aria-label="انتخاب همه موارد این صفحه"></th>
+                <th scope="col">شناسه فاکتور</th>
+                <th scope="col">پنل</th>
+                <th scope="col">وضعیت فاکتور</th>
+                <th scope="col">قابلیت تصمیم</th>
+                <th scope="col">نتیجه نهایی</th>
+                <th scope="col">وضعیت روی پنل</th>
+                <th scope="col">دلیل‌ها</th>
+              </tr></thead>
+              <tbody id="own-tbody"></tbody>
+            </table>
+          </div>
+          <div class="pager" id="own-pager"></div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card" id="own-batches" data-testid="own-batches">
+            <h2>دسته‌های ثبت‌شده</h2>
+            <div class="table-wrap">
+              <table class="table">
+                <thead><tr><th scope="col">زمان</th><th scope="col">اقدام</th><th scope="col">اعمال‌شده</th><th scope="col">بدون تغییر</th><th scope="col">یادداشت</th><th scope="col"><span class="sr-only">بازگرداندن</span></th></tr></thead>
+                <tbody id="own-batches-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="card" id="own-audit" data-testid="own-audit">
+            <div class="card-head">
+              <h2>دفتر رویدادها</h2>
+              <button type="button" class="btn btn-secondary btn-sm" id="own-audit-verify" data-testid="own-audit-verify">بررسی سلامت زنجیره</button>
+            </div>
+            <p class="small" id="own-audit-result" data-testid="own-audit-result" role="status" hidden></p>
+            <div class="table-wrap">
+              <table class="table table-compact">
+                <thead><tr><th scope="col">#</th><th scope="col">زمان</th><th scope="col">اقدام</th><th scope="col">فاکتور</th><th scope="col">از</th><th scope="col">به</th></tr></thead>
+                <tbody id="own-audit-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card" id="own-live" data-testid="own-live">
+            <h2>بررسی فقط‌خواندنی وضعیت روی پنل</h2>
+            <p class="muted small">فقط وضعیت سرویس خوانده می‌شود و هیچ تغییری روی پنل انجام نمی‌شود. وضعیت روی پنل فقط نشانه ریسک است و مالکیت را اثبات نمی‌کند.</p>
+            <div class="note" id="own-live-off" data-testid="own-live-off" hidden>
+              بررسی فقط‌خواندنی پنل به‌طور پیش‌فرض خاموش است. در صورت نیاز می‌توانید آن را در «امنیت و منابع» روشن کنید.
+              <div class="actions"><button type="button" class="btn btn-ghost btn-sm" id="own-live-settings">رفتن به تنظیمات</button></div>
+            </div>
+            <form id="own-live-form" novalidate hidden>
+              <div class="field">
+                <label for="own-live-panel">کد پنل در میرزا</label>
+                <select id="own-live-panel" data-testid="own-live-panel"></select>
+              </div>
+              <div class="field">
+                <label for="own-live-url">نشانی پنل</label>
+                <input type="text" id="own-live-url" data-testid="own-live-url" dir="ltr" spellcheck="false" autocomplete="off" placeholder="https://panel.example:8000">
+              </div>
+              <div class="field">
+                <label for="own-live-user">نام کاربری مدیر پنل</label>
+                <input type="text" id="own-live-user" data-testid="own-live-user" dir="ltr" spellcheck="false" autocomplete="off">
+              </div>
+              <div class="field">
+                <label for="own-live-pass">رمز مدیر پنل</label>
+                <input type="password" id="own-live-pass" data-testid="own-live-pass" dir="ltr" autocomplete="off" aria-describedby="own-live-help">
+                <p class="help" id="own-live-help">اطلاعات ورود فقط برای همین بررسی در حافظه برنامه نگه داشته می‌شود و ذخیره نمی‌شود. فقط سرویس‌های همین پنل در نتایج فیلتر فعلی بررسی می‌شوند.</p>
+              </div>
+              <div class="actions">
+                <button type="submit" class="btn btn-secondary" id="own-live-start" data-testid="own-live-start">بررسی فقط‌خواندنی</button>
+                <button type="button" class="btn btn-ghost" id="own-live-cancel" data-testid="own-live-cancel" hidden>توقف بررسی</button>
+              </div>
+            </form>
+            <div id="own-live-progress" hidden>
+              <div class="progress" id="own-live-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="پیشرفت بررسی پنل"><div class="progress-fill" id="own-live-fill"></div></div>
+              <p class="small" id="own-live-text" role="status" aria-live="polite"></p>
+            </div>
+          </div>
+          <div class="card" id="own-final" data-testid="own-final">
+            <h2>نهایی‌سازی و خروجی</h2>
+            <p class="muted small">پس از مهر و موم، هیچ تصمیمی قابل تغییر نیست. پیش از آن، همه تصمیم‌ها قابل بازگرداندن هستند.</p>
+            <div class="actions">
+              <button type="button" class="btn btn-warn" id="own-seal" data-testid="own-seal">مهر و موم تصمیم‌ها</button>
+              <button type="button" class="btn btn-secondary" id="own-export" data-testid="own-export">دانلود فایل تصمیم‌ها (JSON امضاشده)</button>
+            </div>
+            <form id="own-export-pass-form" class="own-export-pass" novalidate hidden>
+              <div class="field">
+                <label for="own-export-pass">رمز بسته</label>
+                <input type="password" id="own-export-pass" data-testid="own-export-pass" dir="ltr" autocomplete="off" aria-describedby="own-export-pass-help">
+                <p class="help" id="own-export-pass-help">این بسته با رمز ساخته شده است؛ برای امضای فایل تصمیم‌ها همان رمز لازم است. رمز ذخیره نمی‌شود.</p>
+              </div>
+              <button type="submit" class="btn btn-secondary btn-sm" data-testid="own-export-pass-submit">دانلود با رمز</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- 4b. Coverage -->
     <section class="view" id="view-coverage" data-view-name="coverage" aria-labelledby="h-coverage" hidden>
       <header class="view-head">
@@ -632,6 +808,64 @@
       <button type="button" class="btn btn-ghost" id="confirm-cancel" data-testid="confirm-cancel">انصراف</button>
     </div>
   </form>
+</dialog>
+
+<dialog id="own-plan-dialog" class="dialog dialog-wide" aria-labelledby="own-plan-title" data-testid="own-plan-dialog">
+  <form method="dialog" id="own-plan-form" novalidate>
+    <h2 id="own-plan-title">تأیید اقدام گروهی</h2>
+    <div class="importer-warning" id="own-plan-attest" data-testid="own-plan-attest" role="note" hidden>
+      <strong>این یک تأیید مدیر است و اثبات مالکیت نیست.</strong>
+      <span>فقط مالک ثبت‌شده در فاکتور پذیرفته می‌شود. این سرویس‌ها در همه گزارش‌ها و در خروجی جدا از «مالکیت اثبات‌شده» و با برچسب «تأیید مدیر» نگه داشته می‌شوند.</span>
+    </div>
+    <dl class="kv-grid" id="own-plan-kv" data-testid="own-plan-kv"></dl>
+    <div id="own-plan-noteligible"></div>
+    <div id="own-plan-risks"></div>
+    <div id="own-plan-unreviewed"></div>
+    <p class="field-error" id="own-plan-error" data-testid="own-plan-error" role="alert" hidden></p>
+    <div id="own-plan-confirm">
+      <div class="field">
+        <label for="own-plan-count" id="own-plan-count-label">برای تأیید، تعداد مواردی را که تغییر می‌کنند تایپ کنید</label>
+        <input type="text" id="own-plan-count" data-testid="own-plan-count" inputmode="numeric" dir="ltr" autocomplete="off" spellcheck="false">
+      </div>
+      <label class="check-row" for="own-plan-ack">
+        <input type="checkbox" id="own-plan-ack" data-testid="own-plan-ack">
+        <span id="own-plan-ack-text">پیامد این اقدام را خواندم و آن را تأیید می‌کنم.</span>
+      </label>
+    </div>
+    <div class="actions">
+      <button type="button" class="btn btn-primary" id="own-plan-commit" data-testid="own-plan-commit" disabled>ثبت نهایی</button>
+      <button type="button" class="btn btn-secondary" id="own-plan-replan" data-testid="own-plan-replan" hidden>برنامه‌ریزی دوباره</button>
+      <button type="button" class="btn btn-ghost" id="own-plan-cancel" data-testid="own-plan-cancel">انصراف</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="own-seal-dialog" class="dialog" aria-labelledby="own-seal-title" data-testid="own-seal-dialog">
+  <form method="dialog" id="own-seal-form" novalidate>
+    <h2 id="own-seal-title">مهر و موم تصمیم‌های مالکیت</h2>
+    <p id="own-seal-text"></p>
+    <div class="field">
+      <label for="own-seal-word">برای تأیید، کلمه SEAL را تایپ کنید</label>
+      <input type="text" id="own-seal-word" data-testid="own-seal-word" dir="ltr" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="field">
+      <label for="own-seal-count" id="own-seal-count-label">تعداد کل سرویس‌ها</label>
+      <input type="text" id="own-seal-count" data-testid="own-seal-count" inputmode="numeric" dir="ltr" autocomplete="off" spellcheck="false">
+    </div>
+    <p class="field-error" id="own-seal-error" role="alert" hidden></p>
+    <div class="actions">
+      <button type="button" class="btn btn-warn" id="own-seal-ok" data-testid="own-seal-ok" disabled>مهر و موم</button>
+      <button type="button" class="btn btn-ghost" id="own-seal-cancel">انصراف</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="own-detail" class="dialog dialog-wide own-drawer" aria-labelledby="own-detail-title" data-testid="own-detail">
+  <div class="card-head">
+    <h2 id="own-detail-title">جزئیات سرویس</h2>
+    <button type="button" class="icon-btn" id="own-detail-close" data-testid="own-detail-close" aria-label="بستن جزئیات">×</button>
+  </div>
+  <div id="own-detail-body"></div>
 </dialog>
 </body>
 </html>
