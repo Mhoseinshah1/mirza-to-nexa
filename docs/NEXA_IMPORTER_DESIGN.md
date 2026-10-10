@@ -7,9 +7,17 @@
 >
 > This document supersedes the step lists of [`NEXA_IMPORTER_PLAN.md`](NEXA_IMPORTER_PLAN.md) where the two
 > differ. The plan keeps the background, the module-retirement rules (§5) and the Phase-2 destination
-> table (§8.1). Content contract: [`PACKAGE_CONTRACT.md`](PACKAGE_CONTRACT.md) (1.2.0). Container and
+> table (§8.1). Content contract: [`PACKAGE_CONTRACT.md`](PACKAGE_CONTRACT.md) (1.4.0). Container and
 > trust model: [`NXPKG_FORMAT.md`](NXPKG_FORMAT.md). NEXA code facts: [`NEXA_EVIDENCE.md`](NEXA_EVIDENCE.md)
 > (nexa-bot @ `9e604de`).
+
+> **Source snapshot (contract 1.4.0).** The importer NEXA is actually building reads the package through its
+> existing `LegacySourceSession` port: `NxpkgLegacySourceConnector` serves `tables()`, `catalogColumns()`,
+> `countRows()` and `syntheticMarker()` from `source/catalog.json` and `rows()` / `readSetRows()` from
+> `source/tables/{user,invoice,product}.jsonl` (format: `PACKAGE_CONTRACT.md` §"Source snapshot"), so the
+> existing `LegacyImporterService` re-decides everything from raw cells. The NEXA-side contract is
+> `nexa-bot` [`docs/legacy-migration/nxpkg-importer.md`](https://github.com/Mhoseinshah1/nexa-bot/blob/main/docs/legacy-migration/nxpkg-importer.md);
+> where it differs from this design, that document governs the NEXA implementation.
 
 ## 0. Principles (each one is tested in §15)
 

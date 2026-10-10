@@ -18,6 +18,7 @@ import hashlib
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from . import modules as _modules  # noqa: F401 - registers every TableSpec before any staging
 from .catalogue import CATALOGUE, EXCLUDED
@@ -220,8 +221,13 @@ class Staging:
 
 
 def stage_dumps(sql_files: list[Path], db_path: Path, *, cancel: CancelToken | None = None,
-                progress: ProgressFn | None = None) -> StagingResult:
-    """Parse every dump file (streaming) into a fresh staging database."""
+                progress: ProgressFn | None = None, observer: Any = None) -> StagingResult:
+    """Parse every dump file (streaming) into a fresh staging database.
+
+    ``observer`` (optional; e.g. :class:`~mirza2nexa.source_snapshot.SnapshotCollector`) sees the
+    same events in the same pass: ``on_file(path)`` before each file, then ``on_table`` /
+    ``on_row`` after staging accepted the event, and ``finish()`` at the end.
+    """
     _modules.verify_registry()  # fail closed: never stage with a missing module or table spec
     staging = Staging(db_path)
     total = sum(p.stat().st_size for p in sql_files)
@@ -236,17 +242,25 @@ def stage_dumps(sql_files: list[Path], db_path: Path, *, cancel: CancelToken | N
                 if progress:
                     progress(_base + done, total)
 
+            if observer is not None:
+                observer.on_file(path)
             reader = DumpReader(path, cancel=cancel, progress=_p)
             for ev in reader.events():
                 if isinstance(ev, RowEvent):
                     staging.on_row(ev)
+                    if observer is not None:
+                        observer.on_row(ev)
                 elif isinstance(ev, TableEvent):
                     staging.on_table(ev.table)
+                    if observer is not None:
+                        observer.on_table(ev.table)
                 elif isinstance(ev, WarningEvent):
                     staging.on_warning(ev)
             done_before += size
             result_files.append(path.name)
         staging.finish()
+        if observer is not None:
+            observer.finish()
     finally:
         staging.close()
     return StagingResult(db_path=db_path, tables=staging.tables, warnings=staging.warnings,

@@ -284,6 +284,9 @@ BLOCKER_CODE_FA: dict[str, str] = {
     "SOURCE_RECOUNT_MISMATCH": "مغایرت بازشماری مستقل",
     "TABLE_DEFINED_TWICE": "تعریف تکراری جدول",
     "UNCLASSIFIED_TABLE": "جدول طبقه‌بندی‌نشده",
+    "SOURCE_SNAPSHOT_BINARY_COLUMN": "ستون باینری در داده خام مبدأ",
+    "SOURCE_SNAPSHOT_VALUE_UNREPRESENTABLE": "مقدار ناسازگار با نوع ستون",
+    "SOURCE_SNAPSHOT_KEY_INVALID": "کلید اصلی خالی یا تکراری",
 }
 
 BLOCKER_CATEGORY_FA: dict[str, str] = {
@@ -308,6 +311,9 @@ BLOCKER_CATEGORY: dict[str, str] = {
     "UNREPRESENTABLE_CELLS": "data_quality",
     "PANEL_TARGET_UNKNOWN_CODE": "data_quality",
     "SERVICE_ACCOUNTING_MISMATCH": "data_quality",
+    "SOURCE_SNAPSHOT_BINARY_COLUMN": "schema",
+    "SOURCE_SNAPSHOT_VALUE_UNREPRESENTABLE": "data_quality",
+    "SOURCE_SNAPSHOT_KEY_INVALID": "data_quality",
 }
 
 _CAT_PATTERNS = (

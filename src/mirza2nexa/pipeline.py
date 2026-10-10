@@ -112,7 +112,7 @@ def _cleanup_plaintext(workspace: Path) -> None:
 
     for name in ("sql", "stage", "out"):
         shutil.rmtree(workspace / name, ignore_errors=True)
-    for name in ("staging.sqlite", "staging.sqlite-journal", "diff.sqlite"):
+    for name in ("staging.sqlite", "staging.sqlite-journal", "diff.sqlite", "snapshot.sqlite"):
         (workspace / name).unlink(missing_ok=True)
 
 
@@ -171,7 +171,16 @@ def _convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
     stage("schema", None)
     db_path = workspace / "staging.sqlite"
     db_path.unlink(missing_ok=True)
-    staged = stage_dumps([e.path for e in extracted], db_path, cancel=cancel, progress=progress)
+    # Raw source snapshot (contract 1.4.0): collected in the same single parse as staging.
+    from .source_snapshot import SnapshotCollector
+
+    snapshot = SnapshotCollector(workspace / "snapshot.sqlite")
+    try:
+        staged = stage_dumps([e.path for e in extracted], db_path, cancel=cancel, progress=progress,
+                             observer=snapshot)
+    except BaseException:
+        snapshot.close()
+        raise
     if opts.delete_sql_after_parse:
         for e in extracted:
             e.path.unlink(missing_ok=True)
@@ -205,11 +214,18 @@ def _convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
         sinks[rel] = _SchemaSink(writer.open_jsonl(rel))
         return sinks[rel]
 
+    try:
+        snap = snapshot.write(writer)
+    finally:
+        snapshot.close()
+
     conv = Converter(db_path, staged.tables, profile, fingerprint, open_jsonl, money_unit=opts.money_unit,
                      cancel=cancel, progress=progress, ref_key=ref_key)
     outcome = conv.run()
     if staged.unrepresentable_cells:
         outcome.block("UNREPRESENTABLE_CELLS", staged.unrepresentable_cells)
+    for code, n in sorted(snap.blockers.items()):
+        outcome.block(code, n)
     for name in ("records/customers.jsonl", "records/wallet_opening_balances.jsonl", "records/legacy_debts.jsonl"):
         if name in sinks:
             sinks[name].close()
@@ -283,6 +299,8 @@ def _convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
             "encryption": insp.encryption,
             "sql_files": [{"entry": e.entry_name, "bytes": e.size, "sha256": e.sha256} for e in extracted],
             "parser_warnings": staged.warnings,
+            "snapshot": {"synthetic_marker": snap.synthetic_marker, "engine_hint": snap.catalog["engine_hint"],
+                         "tables": len(snap.catalog["tables"]), "rows_written": snap.table_files},
             "tables": {n: {"rows": t.rows, "columns": list(t.columns), "classified": t.classified,
                            "never_read_columns_present": list(t.never_read_present)}
                        for n, t in sorted(staged.tables.items())},

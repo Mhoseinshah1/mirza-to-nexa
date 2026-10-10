@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
-from ..catalogue import CATALOGUE, FINANCIAL, OPERATIONAL, PERSONAL, PUBLIC, SECRET, ColumnSpec, TableSpec
+from ..catalogue import (
+    CATALOGUE,
+    EXCLUDED,
+    FINANCIAL,
+    OPERATIONAL,
+    PERSONAL,
+    PUBLIC,
+    SECRET,
+    ColumnSpec,
+    TableSpec,
+)
 from ..mapping import rules
 
 _SENS = {
@@ -34,3 +44,17 @@ for _t, _purpose, _fa, _target in (
         evidence=("nexa-bot@9e604def source-port.ts:36-83",), primary_key=(rules.PRIMARY_KEYS[_t],),
         columns=_cols(_t), sensitivity=FINANCIAL,
     ))
+
+# NEXA's synthetic-dataset marker: present only in synthetic dumps (NEXA's fixture and this
+# converter's ``synth``), never in a real Mirza backup. Its label is read by the source snapshot
+# (``source_snapshot.py`` → ``source/catalog.json.synthetic_marker``); no row is staged.
+CATALOGUE.register(TableSpec(
+    name="nexa_synthetic_fixture", klass=EXCLUDED, module="core",
+    purpose="Synthetic-dataset marker (label only); never present in a real backup",
+    purpose_fa="نشانگر داده آزمایشی (ساختگی)؛ در بکاپ واقعی وجود ندارد",
+    reason="NEXA marks every synthetic load with this table (source-port.ts:121-122, "
+           "mysql-legacy-source.ts:347-360); it carries no Mirza data",
+    nexa_target="none (read as LegacySourceSession.syntheticMarker())",
+    evidence=("nexa-bot source-port.ts:121-122", "nexa-bot tests/fixtures/legacy/synthetic-legacy.ts:761-765"),
+    columns=(ColumnSpec("label", PUBLIC),),
+))
