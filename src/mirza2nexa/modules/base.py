@@ -133,6 +133,14 @@ class ModuleContext:
             self._c.warning_messages.setdefault(code, message)
         self._c.out.warn(code, n)
 
+    def register_messages(self, reviews: dict[str, str] | None = None, blockers: dict[str, str] | None = None,
+                          warnings: dict[str, str] | None = None) -> None:
+        """Register Persian explanations for a module's codes up front (first registration wins)."""
+        for src, dst in ((reviews, self._c.messages), (blockers, self._c.blocker_messages),
+                         (warnings, self._c.warning_messages)):
+            for code, msg in (src or {}).items():
+                dst.setdefault(code, msg)
+
     def count(self, entity: str, key: str, n: int = 1) -> None:
         self._c._count(entity, key, n)
 

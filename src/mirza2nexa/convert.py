@@ -801,11 +801,11 @@ class Converter:
 
     def _mapping_table(self) -> None:
         blocked = self.profile.entity_blocked
-        has_payment_tables = any(n.lower() in {"payment_report", "payments"} for n in self.tables)
 
         def st(entity: str, default: str = "mapped") -> str:
             return "blocked" if entity in blocked else default
 
+        module_entries = list(self.out.mapping)  # added by domain modules via ctx.mapping()
         self.out.mapping = [
             {"entity": "customers", "source_table": "user",
              "source_columns": ["id", "User_Status", "username", "agent", "number(class only)", "limit_usertest"],
@@ -841,10 +841,19 @@ class Converter:
             {"entity": "orders", "source_table": None, "source_columns": [],
              "target": "none — adoption creates LEGACY_ADOPTION orders inside NEXA", "status": "absent",
              "note": "By design, invoices never become orders/payments (migration-order-origin.md)."},
-            {"entity": "payments", "source_table": "Payment_report" if has_payment_tables else None,
-             "source_columns": [], "target": "none", "status": "blocked",
-             "note": "Payment tables are UNCLASSIFIED in NEXA; columns unknown — not migrated."},
+            {"entity": "payments", "source_table": "Payment_report",
+             "source_columns": ["id", "id_user", "id_order", "time", "at_updated", "price", "dec_not_confirmed",
+                                "Payment_Method", "payment_Status", "message_id", "receipt_trace"],
+             "target": "read-only payment history archive (legacy_payment_history)", "status": "archived",
+             "note": "History only: never a NEXA payment, revenue or wallet credit (modules/payments.py)."},
+            {"entity": "wallet_history", "source_table": "wallet_transaction",
+             "source_columns": ["id", "id_user", "type", "amount", "balance_before", "balance_after", "ref_id",
+                                "source", "reason", "created_at"],
+             "target": "read-only wallet history archive + per-customer check against the snapshot",
+             "status": "archived",
+             "note": "Never applied to balances; the snapshot user.Balance stays the only opening figure."},
             {"entity": "resellers", "source_table": "user.agent", "source_columns": ["agent"],
              "target": "none (agents import as ordinary customers)", "status": "blocked",
              "note": "OQ-LWD-03: reseller role/pricing requires an owner decision."},
         ]
+        self.out.mapping.extend(module_entries)
