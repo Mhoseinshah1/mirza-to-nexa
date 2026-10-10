@@ -107,6 +107,21 @@ class GuardMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# Evidence/free-text fields kept inside the encrypted package but never shown in the UI preview
+# (receipt traces, rejection notes with gateway payloads, customer/admin text, raw fields).
+PREVIEW_MASKED_KEYS = frozenset({"receipt_trace", "rejection_note", "reason", "customer_text", "admin_answer",
+                                 "fields_raw", "text", "message_text", "body", "fields"})
+
+
+def _mask_preview(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        return {k: ("[پنهان در پیش‌نمایش]" if k in PREVIEW_MASKED_KEYS and v not in (None, "", {}, [])
+                    else _mask_preview(v)) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_mask_preview(v) for v in obj]
+    return obj
+
+
 def create_app(manager: JobManager, *, port: int, launch_token: str) -> FastAPI:
     app = FastAPI(title="Mirza → NEXA Migration Studio", docs_url=None, redoc_url=None, openapi_url=None)
     state = AppState(manager, port, launch_token)
@@ -362,7 +377,7 @@ def create_app(manager: JobManager, *, port: int, launch_token: str) -> FastAPI:
         items = []
         with open(p, encoding="utf-8") as fh:
             for line in fh:
-                items.append(json.loads(line))
+                items.append(_mask_preview(json.loads(line)))
                 if len(items) >= limit:
                     break
         return JSONResponse({"entity": entity, "items": items})

@@ -299,6 +299,8 @@ def _convert(ctx: ModuleContext, stats) -> None:
         last_after = state["last_after"]
         if snap is None:
             verdict = "NO_SNAPSHOT"
+        elif state.get("order_unproven"):
+            verdict = "ORDER_UNPROVEN"
         elif last_after is None:
             verdict = "HISTORY_UNPARSEABLE"
         elif last_after == snap:
@@ -334,17 +336,28 @@ def _convert(ctx: ModuleContext, stats) -> None:
                         table=stats.name, pk=cust["telegram_user_id"] or None, severity="warning",
                         data={"transactions": state["n"], "delta_minor": str(delta), "chain_gaps": state["gaps"]})
 
+    # A customer whose times are not all parseable in ONE format cannot be ordered by time
+    # (NULL keys and local-vs-epoch prefixes would interleave wrongly): order those by id and
+    # mark the verdict ORDER_UNPROVEN instead of trusting a time-sorted "last" row.
+    conn.execute("DROP TABLE IF EXISTS m2n_wtx_mixed")
+    conn.execute("CREATE TEMP TABLE m2n_wtx_mixed AS SELECT uid FROM m2n_wtx GROUP BY uid "
+                 "HAVING SUM(tkey IS NULL) > 0 OR COUNT(DISTINCT substr(tkey, 1, 1)) > 1")
+    conn.execute("CREATE INDEX m2n_wtx_mixed_uid ON m2n_wtx_mixed (uid)")
     cur = conn.execute(
-        "SELECT w.uid, w.idtext, w.before_v, w.after_v, w.fmt, w.rec, d.n, d.first_rowno, w.rowno FROM m2n_wtx w "
+        "SELECT w.uid, w.idtext, w.before_v, w.after_v, w.fmt, w.rec, d.n, d.first_rowno, w.rowno, "
+        "m.uid IS NOT NULL AS mixed FROM m2n_wtx w "
         "LEFT JOIN m2n_wtx_dup d ON d.dkey = w.dkey "
-        "ORDER BY w.uid IS NULL, w.uid, w.tkey IS NULL, w.tkey, w.idnum IS NULL, w.idnum, w.idtext, w.rowno")
-    for uid, tid, before_s, after_s, fmt, rec_json, dn, dfirst, rowno in cur:
+        "LEFT JOIN m2n_wtx_mixed m ON m.uid = w.uid "
+        "ORDER BY w.uid IS NULL, w.uid, CASE WHEN m.uid IS NULL THEN w.tkey END, "
+        "w.idnum IS NULL, w.idnum, w.idtext, w.rowno")
+    for uid, tid, before_s, after_s, fmt, rec_json, dn, dfirst, rowno, mixed in cur:
         ctx.tick()
         if not state or state["uid"] != uid:
             close_group()
             state.clear()
             state.update({"uid": uid, "cust": customer_relation(ctx, uid), "n": 0, "gaps": 0, "inconsistent": 0,
-                          "prev_after": None, "last_after": None, "last_id": None, "formats": set(), "first": True})
+                          "prev_after": None, "last_after": None, "last_id": None, "formats": set(), "first": True,
+                          "order_unproven": bool(mixed)})
         rec = json.loads(rec_json)
         before = int(before_s) if before_s is not None else None
         after = int(after_s) if after_s is not None else None
@@ -359,7 +372,8 @@ def _convert(ctx: ModuleContext, stats) -> None:
         state["first"] = False
         chain_counts[chain] += 1
         rec["chain"] = chain
-        rec["chain_order"] = "created_at (zone-less), then id"
+        rec["chain_order"] = ("id (times missing or in mixed formats: ORDER_UNPROVEN)" if mixed
+                              else "created_at (zone-less), then id")
         rec["duplicate_suspect"] = dn is not None
         if dn is not None:
             suspect_rows += 1

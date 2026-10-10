@@ -36,32 +36,39 @@ from collections.abc import Callable
 _KV_LABELS = (
     r"pass(?:word|wd|phrase)?|pwd|secret|client[_-]?secret|webhook[_-]?secret|token|access[_-]?token|"
     r"api[_-]?key|apikey|api[_-]?token|merchant(?:[_-]?id)?|private[_-]?key|auth(?:orization)?|cookie|"
-    r"session(?:[_-]?id)?|otp|cvv2?|pin|رمز(?:\s*عبور)?|گذرواژه|کلمه\s*عبور|توکن"
+    r"session(?:[_-]?id)?|otp|cvv2?|pin|pw|api\s+key|login|user(?:name)?\s*/\s*pass(?:word)?|"
+    r"رمز(?:\s*عبور)?|گذرواژه|کلمه\s*عبور|توکن"
 )
 
 _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("private_key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(-----END [A-Z ]*PRIVATE KEY-----|$)", re.S)),
     ("proxy_link", re.compile(r"\b(?:vless|vmess|trojan|ssr?|hysteria2?|hy2|tuic|wireguard|wg)://\S+", re.I)),
     ("url_creds", re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@\S+", re.I)),
-    ("sub_url", re.compile(r"\bhttps?://\S*(?:/sub/|/subscription|[?&](?:token|key|secret|sub)=)\S*", re.I)),
+    ("sub_url", re.compile(
+        r"\bhttps?://\S*(?:/sub/|/subscription|/[a-z_-]*sub[a-z_-]*/[A-Za-z0-9_-]{8,}|[?&](?:token|key|secret|sub)=)\S*",
+        re.I)),
     ("bot_token", re.compile(r"(?<![0-9A-Za-z])\d{6,12}:[A-Za-z0-9_-]{30,}(?![A-Za-z0-9_-])")),
     ("jwt", re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")),
     ("bearer", re.compile(r"\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{16,}", re.I)),
+    # Authorization headers of any scheme: redact scheme *and* credential ("Token abc…").
+    ("auth_header", re.compile(r"\bAuthorization\s*[:=]\s*(?!\[REDACTED)\S+(?:[ \t]+(?!\[REDACTED)\S+)?", re.I)),
+    # user:password@host without a URL scheme
+    ("url_creds", re.compile(r"(?<![\w/])[\w.+-]{1,64}:[^\s@/:]{4,}@[\w-]+(?:\.[\w-]+)+")),
     ("kv_secret", re.compile(
-        r"(?P<label>[\"']?(?<![\w])(?:" + _KV_LABELS + r")[\"']?\s*[:=]\s*[\"']?)"
+        r"(?P<label>[\"']?(?<![\w])(?:" + _KV_LABELS + r")[\"']?\s*(?:[:=]|\s-\s)\s*[\"']?)"
         r"(?P<value>(?!\[REDACTED)[^\s\"',}&<]{4,})", re.I)),
     ("iban", re.compile(r"(?<![A-Za-z0-9])IR[ -]?(?:\d[ -]?){23}\d(?!\d)", re.I)),
     ("uuid", re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")),
     ("secret_like", re.compile(r"(?<![A-Za-z0-9_+/=-])[A-Za-z0-9_+/=-]{32,}(?![A-Za-z0-9_+/=-])")),
 ]
 # ``\d`` is Unicode-aware: Persian (۰-۹) and Arabic-Indic (٠-٩) digits match as well.
-_CARD = re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)")
+_CARD = re.compile(r"(?<!\d)(?:\d[ \t./_-]?){12,18}\d(?!\d)")
 
 # Column-name heuristics for tables without a column-level catalogue entry.
 _SECRET_NAME = re.compile(
     r"(pass(word|wd)?|secret|token|api[_-]?key|apikey|private|merchant|marchent|cookie|session|"
     r"credential|auth|hash|salt|otp|pin\b|cvv|card|iban|sheba|shaba|access[_-]?key|"
-    r"wallet_?address|endpoint|header|"
+    r"wallet_?address|endpoint|header|pwd|(?:^|_)pw(?:$|_)|(?:^|_)key(?:$|_)|url|link|webhook|signature|login|cred|"
     r"user_info|subscription|sub_?link|config_?link|uuid|inbound|proxies|link_sub|url_sub)",
     re.I,
 )

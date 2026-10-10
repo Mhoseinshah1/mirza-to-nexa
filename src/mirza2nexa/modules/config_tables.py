@@ -29,10 +29,9 @@ weaker than it.
 
 Key-value tables (``PaySetting``, ``shopSetting``): only keys on an explicit allow-list leave
 the converter. Known credential keys and keys the evidence does not describe are dropped and
-counted (``dropped_secret_keys`` / ``dropped_unknown_keys`` in coverage). NOTE: the value column
-of these tables is staged (it must be, to read the allow-listed values) and the staging SQLite is
-deleted at the end of the run; see ``docs/DATA_PROTECTION.md`` §"Residual risks" for the proposed
-staging-time row filter that would remove even that.
+counted (``dropped_secret_keys`` / ``dropped_unknown_keys`` in coverage). The allow-list is also
+applied at staging time (``TableSpec.kv_filter``): the value of any other key is replaced by NULL
+before it reaches the staging database, so gateway credentials never touch disk.
 """
 
 from __future__ import annotations
@@ -172,8 +171,8 @@ SPECS: tuple[TableSpec, ...] = (
            f"{PRO} db/migrations/008_abangateway_gateway.php:21-29", f"{BMP} table.php:511-532",
            f"{NEXA_R}/mirzabotfinancialinvestigationcomplete", f"{EVJ}#PaySetting"),
           (_c("NamePay", PUBLIC, "setting key"),
-           _c("ValuePay", FINANCIAL, "SECRET by default (evidence JSON); staged only so the module can export the "
-                                       "allow-listed keys; every other key is dropped")),
+           _c("ValuePay", FINANCIAL, "SECRET by default (evidence JSON); only allow-listed keys' values are staged "
+                                       "(kv_filter); every other value is NULL at staging time")),
           primary_key=("NamePay",), sensitivity=SECRET),
     _spec("shopSetting", CONFIGURATION, "Shop switches and custom-plan prices (key-value)",
           "تنظیمات فروشگاه و قیمت پلن دلخواه",

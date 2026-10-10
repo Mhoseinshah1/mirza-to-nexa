@@ -149,6 +149,17 @@ def _convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
     extracted = extract_sql(archive, sql_dir, opts.password, opts.limits, cancel, progress)
     opts.password = None
 
+    # Key for references to secret values (see ModuleContext.secret_ref): derived from the raw
+    # dump bytes under a domain prefix, so it is deterministic per backup but not computable from
+    # the public sha256 of the files written into report.json.
+    ref_hash = hashlib.sha256(b"m2n-secret-ref-key:v1\0")
+    for e in extracted:
+        with open(e.path, "rb") as fh:
+            for chunk in iter(lambda fh=fh: fh.read(1 << 20), b""):
+                ref_hash.update(chunk)
+        cancel.check()
+    ref_key = ref_hash.digest()
+
     stage("schema", None)
     db_path = workspace / "staging.sqlite"
     db_path.unlink(missing_ok=True)
@@ -187,7 +198,7 @@ def _convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
         return sinks[rel]
 
     conv = Converter(db_path, staged.tables, profile, fingerprint, open_jsonl, money_unit=opts.money_unit,
-                     cancel=cancel, progress=progress)
+                     cancel=cancel, progress=progress, ref_key=ref_key)
     outcome = conv.run()
     if staged.unrepresentable_cells:
         outcome.block("UNREPRESENTABLE_CELLS", staged.unrepresentable_cells)

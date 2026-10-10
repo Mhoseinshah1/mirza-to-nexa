@@ -141,6 +141,19 @@ class ModuleContext:
             for code, msg in (src or {}).items():
                 dst.setdefault(code, msg)
 
+    def secret_ref(self, value: str | None, purpose: str = "ref") -> str | None:
+        """Deterministic, keyed (HMAC-SHA256) reference to a secret value: links rows without the value.
+
+        The key is derived from the raw dump bytes and never written anywhere, so short codes
+        cannot be brute-forced from public report data.
+        """
+        if value is None:
+            return None
+        import hmac
+
+        mac = hmac.new(self._c.ref_key, f"{purpose}\0{value}".encode("utf-8", "surrogatepass"), "sha256")
+        return f"{purpose}:{mac.hexdigest()[:24]}"
+
     def count(self, entity: str, key: str, n: int = 1) -> None:
         self._c._count(entity, key, n)
 

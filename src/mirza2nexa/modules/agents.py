@@ -39,7 +39,6 @@ This file also hosts the small helpers shared by ``engagement.py`` and ``support
 
 from __future__ import annotations
 
-import hashlib
 import re
 from datetime import UTC, datetime
 from typing import Any
@@ -102,11 +101,9 @@ def code_ref(ctx: ModuleContext, code: str | None) -> str | None:
     """Stable, non-reversible-by-reading reference for a redeemable code (never the code)."""
     if code is None:
         return None
-    return "code:" + hashlib.sha256(f"m2n:code:v1:{ctx.fingerprint}:{code}".encode()).hexdigest()[:24]
+    return ctx.secret_ref(code, "code")
 
 
-def text_digest(value: str | None) -> str | None:
-    return None if value is None else hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()[:16]
 
 
 _YMD = re.compile(r"(\d{4})[/-](\d{1,2})[/-](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?")
@@ -158,7 +155,8 @@ class RowKeys:
 
     def __call__(self, row: dict[str, Any]) -> tuple[str, str | None, str]:
         checksum = self.ctx.row_checksum(self.stats.name, row)
-        key, pk = idempotency_key(self.stats.name, self.stats.primary_key, row, checksum, self.seen)
+        key, pk = idempotency_key(self.stats.name, self.stats.primary_key, row, checksum, self.seen,
+                                  mask=lambda v: self.ctx.secret_ref(v, "pk"))
         key = key.replace("legacy:", f"legacy:{self.prefix}:", 1)
         if key in self.keys:
             self.dups += 1

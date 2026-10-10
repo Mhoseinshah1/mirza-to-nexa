@@ -413,6 +413,7 @@ def _convert(ctx: ModuleContext, stats) -> None:
     reviews = BoundedReviews(ctx)
     sink = ctx.open("records/payments.jsonl")
     by_outcome: dict[str, Sum] = {o: Sum() for o in OUTCOMES}
+    by_outcome_direction: dict[str, Sum] = {}
     by_method: dict[str, Sum] = {}
     by_relation: dict[str, Sum] = {}
     by_order: dict[str, Sum] = {}
@@ -471,10 +472,13 @@ def _convert(ctx: ModuleContext, stats) -> None:
         group = receipt_group.get(rowno)
 
         by_outcome[outcome].add(amount)
+        direction = METHOD_DIRECTION.get(method, "CUSTOMER_PAYMENT_MONEY_IN")
+        # Sums never mix directions: admin debits are stored as positive prices (admin.php:3613).
+        by_outcome_direction.setdefault(f"{outcome}/{direction}", Sum()).add(amount)
         by_method.setdefault(method, Sum()).add(amount)
         by_relation.setdefault(cust["relation"], Sum()).add(amount)
         by_order.setdefault(orel, Sum()).add(amount)
-        if outcome == "SUCCEEDED" and method not in ADMIN_METHODS:
+        if outcome == "SUCCEEDED" and method not in ADMIN_METHODS and method != "UNKNOWN":
             succeeded_ex_admin.add(amount)
 
         checksum = ctx.row_checksum(stats.name, r)
@@ -560,11 +564,15 @@ def _convert(ctx: ModuleContext, stats) -> None:
         "balanced": balanced,
         "unit": ctx.money_unit, "currency": ctx.currency,
         "by_outcome": sums_dict(by_outcome),
+        "by_outcome_and_direction": sums_dict(by_outcome_direction),
+        "note_by_outcome": "by_outcome mixes directions (admin debits are stored positive); "
+                           "use by_outcome_and_direction for any money interpretation.",
         "by_method": sums_dict(by_method),
         "by_customer_relation": sums_dict(by_relation),
         "by_order_relation": sums_dict(by_order),
         "by_purpose": dict(sorted(by_purpose.items())),
         "succeeded_excluding_admin_adjustments": succeeded_ex_admin.to_dict(),
+        "succeeded_excluding_admin_note": "excludes admin adjustments and UNKNOWN methods",
         "orphans": {"customer_not_in_backup": by_relation.get("CUSTOMER_NOT_IN_BACKUP", Sum()).count,
                     "customer_missing": by_relation.get("MISSING", Sum()).count},
         "duplicate_receipts": {"groups": len(receipt_groups), "successful_payments": len(receipt_group)},

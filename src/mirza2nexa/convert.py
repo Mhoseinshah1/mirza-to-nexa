@@ -128,7 +128,8 @@ def _cols(stats: TableStats) -> list[str]:
 class Converter:
     def __init__(self, db_path: Path, tables: dict[str, TableStats], profile: SchemaProfile,
                  fingerprint: str, open_jsonl: OpenJsonl, *, money_unit: str | None,
-                 cancel: CancelToken | None = None, progress: ProgressFn | None = None):
+                 cancel: CancelToken | None = None, progress: ProgressFn | None = None,
+                 ref_key: bytes | None = None):
         self.conn = sqlite3.connect(db_path, isolation_level=None)
         self.conn.execute("PRAGMA temp_store=FILE")
         self.conn.execute("PRAGMA cache_size=-32000")
@@ -137,6 +138,9 @@ class Converter:
         self.fingerprint = fingerprint
         self.open = open_jsonl
         self.money_unit = money_unit  # "toman" | "rial" | None
+        # Secret key for references to secret values (codes, secret PKs). Derived from the raw dump
+        # bytes, so it is deterministic per backup yet not computable from anything in report.json.
+        self.ref_key = ref_key or b"m2n-ref-key-unset"
         self.currency = {"toman": "IRT", "rial": "IRR"}.get(money_unit or "")
         self.cancel = cancel or CancelToken()
         self.progress = progress
@@ -785,6 +789,15 @@ class Converter:
             accounted = cov["exported"] + cov["archived"] + cov["review"] + cov["skipped"]
             cov["accounted_rows"] = accounted
             self.out.coverage.append(cov)
+        incomplete = [c["table"] for c in self.out.coverage
+                      if c["rows"] and c["class"] is not None and (
+                          c["status"] == "blocked" or (c["status"] != "excluded" and c["accounted_rows"] != c["rows"]))]
+        if incomplete:
+            self.out.block("COVERAGE_INCOMPLETE", len(incomplete))
+            self.blocker_messages.setdefault(
+                "COVERAGE_INCOMPLETE",
+                "برای برخی جدول‌های طبقه‌بندی‌شده همه ردیف‌ها پوشش داده نشدند (مثلاً ستون‌ها با قرارداد نمی‌خوانند)؛ "
+                "بسته تا بررسی مسدود است.")
         if unclassified:
             self.out.block("UNCLASSIFIED_TABLE", unclassified)
             self.blocker_messages.setdefault(

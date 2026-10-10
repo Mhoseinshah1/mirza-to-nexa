@@ -10,13 +10,19 @@ from __future__ import annotations
 from typing import Any
 
 from ..catalogue import ARCHIVE, CATALOGUE, CONFIGURATION, EXCLUDED, REVIEW
+from ..sensitivity import column_name_is_secret
 from .base import Module, ModuleContext, register_module
 
 ARCHIVE_SCHEMA_VERSION = "v1"
 
 
+def pk_is_sensitive(pk: tuple[str, ...]) -> bool:
+    """A primary key made of a code/secret-looking column must never be written in clear."""
+    return any(column_name_is_secret(c) or "code" in c.lower() for c in pk)
+
+
 def idempotency_key(table: str, stats_pk: tuple[str, ...], row: dict[str, Any], checksum: str,
-                    seen: dict[str, int]) -> tuple[str, str | None]:
+                    seen: dict[str, int], mask=None) -> tuple[str, str | None]:
     """``legacy:<table>:<pk…>`` when a usable primary key exists, else a content key.
 
     Content keys add an occurrence counter so identical rows stay distinct (``…#2``).
@@ -24,6 +30,8 @@ def idempotency_key(table: str, stats_pk: tuple[str, ...], row: dict[str, Any], 
     """
     if stats_pk and all(row.get(c) is not None for c in stats_pk):
         pk_text = "|".join(str(row[c]) for c in stats_pk)
+        if mask is not None and pk_is_sensitive(stats_pk):
+            pk_text = mask(pk_text)
         return f"legacy:{table}:{pk_text}", pk_text
     n = seen.get(checksum, 0) + 1
     seen[checksum] = n
@@ -39,7 +47,8 @@ def export_rows(ctx: ModuleContext, stats, *, record_type: str, rel_dir: str, kl
     for _rowno, row in ctx.rows(stats):
         ctx.tick()
         checksum = ctx.row_checksum(stats.name, row)
-        key, pk = idempotency_key(stats.name, stats.primary_key, row, checksum, seen)
+        key, pk = idempotency_key(stats.name, stats.primary_key, row, checksum, seen,
+                                  mask=lambda v: ctx.secret_ref(v, "pk"))
         if key in keys:  # duplicate primary key in the dump
             dup += 1
             key = f"{key}#dup{dup}"

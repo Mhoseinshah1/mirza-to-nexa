@@ -96,7 +96,11 @@ class TableSpec:
         stored, dropped, unmapped = [], [], []
         for c in ddl_columns:
             if self.columns is None:
-                (dropped if column_name_is_secret(c) else stored).append(c)
+                # Generic (fork) tables: name heuristics, plus opaque value blobs of settings-like
+                # tables, where credentials hide under innocuous names.
+                settings_like = any(w in self.name.lower() for w in ("setting", "config", "option"))
+                blob = c.lower() in {"value", "values", "data", "content", "json", "config", "setting", "settings"}
+                (dropped if column_name_is_secret(c) or (settings_like and blob) else stored).append(c)
                 continue
             spec = self.column(c)
             if spec is None:

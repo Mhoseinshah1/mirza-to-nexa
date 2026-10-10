@@ -238,7 +238,10 @@ def test_coverage_accounts_for_every_row(default):
 def test_vs_tables_value_redaction(default):
     res, _ = default
     rows = read_jsonl(res.stage_dir / "records" / "archive" / "vs_setting.jsonl")
-    assert rows[0]["fields"]["value"] == "[REDACTED:bot_token]"
+    # Settings-like fork tables: the opaque value blob is never staged at all (stronger than redaction).
+    assert "value" not in rows[0]["fields"]
+    cov = {c["table"]: c for c in res.report["coverage"]}
+    assert "value" in cov["vs_setting"]["dropped_secret_columns"]
     assert rows[0]["class"] == "REVIEW"
 
 

@@ -167,12 +167,10 @@ should be purgeable on a customer's request without affecting the financial ledg
 
 ## 8. Residual risks
 
-* **Key-value value columns are staged.** `PaySetting.ValuePay` holds gateway secrets on local
-  disk in the staging SQLite during a run. The SQL dump already holds the same secrets in plaintext
-  at that time, and the file is deleted afterwards. **Proposed framework change** (outside this
-  module's files): `TableSpec.row_filter = (key_column, value_column, allowed_keys)`, applied in
-  `staging.Staging.on_row`, would set non-allow-listed values to `NULL` before they are written.
-  The secrets would then never touch the staging database.
+* **Key-value settings (resolved in Phase 2).** `TableSpec.kv_filter` is applied in
+  `staging.Staging.on_row`: for `PaySetting`/`shopSetting` the value of every key outside the
+  allow-list is set to `NULL` before it is written, so gateway secrets never reach the staging file.
+  The SQL dump itself still holds them in plaintext until it is deleted after parsing.
 * **Redaction is pattern-based.** A credential with no recognisable shape in a free-text column,
   such as a short password typed without a label, will pass through. This is mitigated by
   allow-listing columns, so free text is exported only from tables whose meaning is proven

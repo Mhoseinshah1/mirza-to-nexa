@@ -19,6 +19,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import modules as _modules  # noqa: F401 - registers every TableSpec before any staging
 from .catalogue import CATALOGUE, EXCLUDED
 from .errors import SchemaUnknown
 from .mapping import rules
@@ -221,6 +222,8 @@ class Staging:
 def stage_dumps(sql_files: list[Path], db_path: Path, *, cancel: CancelToken | None = None,
                 progress: ProgressFn | None = None) -> StagingResult:
     """Parse every dump file (streaming) into a fresh staging database."""
+    if not CATALOGUE.specs:  # defence in depth: never stage with an empty catalogue
+        raise RuntimeError("table catalogue is empty")
     staging = Staging(db_path)
     total = sum(p.stat().st_size for p in sql_files)
     done_before = 0
