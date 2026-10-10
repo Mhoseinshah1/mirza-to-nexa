@@ -2622,6 +2622,14 @@
           el('span', { class: 'error-code', text: k })))));
     }
 
+    const abr = obj(p.applicable_by_reason);
+    if (Object.keys(abr).length) {
+      nbox.append(el('h3', { text: 'علت ابهام در مواردی که تغییر می‌کنند' }),
+        el('ul', { class: 'issue-list', 'data-testid': 'own-plan-by-reason' }, Object.keys(abr).map((k) => el('li', { 'data-code': k },
+          el('span', { class: 'msg', text: ownReasonLabel(k) }), el('span', { class: 'pill num', text: fmtNum(abr[k]) + ' مورد' }),
+          el('span', { class: 'error-code', text: k })))));
+    }
+
     const rbox = $('own-plan-risks');
     clear(rbox);
     const risks = objList(p.risks);

@@ -24,7 +24,12 @@ from typing import Protocol
 SUPPORTED_TYPES = frozenset({"marzban"})
 MARZBAN_STATUS = {"active": "LIVE_ACTIVE", "disabled": "LIVE_DISABLED", "limited": "LIVE_LIMITED",
                   "expired": "LIVE_EXPIRED", "on_hold": "LIVE_ON_HOLD"}
-_USERNAME = re.compile(r"[A-Za-z0-9_.@\-]{1,64}")
+# first character alphanumeric: no "." / ".." path segments can ever be formed
+_USERNAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.@\-]{0,63}")
+_NETLOC = re.compile(r"(?:[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}"
+                     r"[A-Za-z0-9])?)*|\[[0-9A-Fa-f:.]+\])(?::[0-9]{1,5})?")
+_PATH = re.compile(r"(?:/[A-Za-z0-9_.~\-]+)*/?")
+_LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
 MAX_RESPONSE_BYTES = 256 * 1024
 
 
@@ -60,8 +65,13 @@ def validate_base_url(base_url: str) -> str:
     if not isinstance(base_url, str) or len(base_url) > 300:
         raise ProbeError("panel.bad_url", "آدرس پنل نامعتبر است.")
     u = urllib.parse.urlsplit(base_url.strip())
-    if u.scheme not in {"http", "https"} or not u.hostname or u.username or u.password or u.query or u.fragment:
+    if u.scheme not in {"http", "https"} or not u.hostname or u.username or u.password or u.query or u.fragment \
+            or not _NETLOC.fullmatch(u.netloc) or not _PATH.fullmatch(u.path) \
+            or any(seg in {".", ".."} for seg in u.path.split("/")):
         raise ProbeError("panel.bad_url", "آدرس پنل باید به شکل https://host[:port][/path] و بدون نام کاربری باشد.")
+    if u.scheme == "http" and u.hostname not in _LOOPBACK:
+        # the admin password and bearer token must never cross the network in clear text
+        raise ProbeError("panel.https_required", "برای امنیت رمز ادمین، آدرس پنل باید با https شروع شود.")
     return urllib.parse.urlunsplit((u.scheme, u.netloc, u.path.rstrip("/"), "", ""))
 
 

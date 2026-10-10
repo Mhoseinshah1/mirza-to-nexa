@@ -65,6 +65,7 @@ PLAN_TTL_SECONDS = 30 * 60
 MAX_EXPLICIT_KEYS = 20_000
 MAX_NOTE = 500
 SAMPLE_SIZE = 10
+MAX_PLANS = 50
 
 DISCLAIMER_FA = ("«تأیید مدیر» یعنی پذیرش مالک ثبت‌شده در فاکتور میرزا با تصمیم صریح مدیر؛ این تأیید اثبات "
                  "مالکیت نیست و در همه گزارش‌ها جدا از «مالکیت اثبات‌شده» شمرده می‌شود. سرویس‌های بدون مالک "
@@ -131,7 +132,8 @@ CREATE TABLE IF NOT EXISTS batches (batch_id TEXT PRIMARY KEY, plan_id TEXT UNIQ
 CREATE TABLE IF NOT EXISTS batch_items (batch_id TEXT NOT NULL, key TEXT NOT NULL, from_state TEXT NOT NULL,
   to_state TEXT NOT NULL, PRIMARY KEY (batch_id, key));
 CREATE TABLE IF NOT EXISTS audit (seq INTEGER PRIMARY KEY, at INTEGER NOT NULL, action TEXT NOT NULL,
-  batch_id TEXT, key TEXT, from_state TEXT, to_state TEXT, note TEXT, prev_hash TEXT NOT NULL, hash TEXT NOT NULL);
+  batch_id TEXT, key TEXT, from_state TEXT, to_state TEXT, binding TEXT, note TEXT, prev_hash TEXT NOT NULL,
+  hash TEXT NOT NULL);
 """
 
 # effective state / final class, computed in SQL so filters and counts never diverge
@@ -191,7 +193,7 @@ class Plan:
     created_at: int
     expires_at: int
     selection: dict[str, Any]
-    changes: list[tuple[str, str, str, str]]  # key, from_state, to_state, binding
+    changes: list[tuple[str, str, str, str, str | None]]  # key, from_state, to_state, binding, batch before
     snapshot: str
     undo_of: str | None = None
     result: dict[str, Any] | None = None
@@ -206,7 +208,7 @@ class ReviewStore:
         self.import_id = import_id
         path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._db = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
+        self._db = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None, timeout=30)
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA synchronous=FULL")
         self._db.executescript(_SCHEMA)
@@ -263,6 +265,13 @@ class ReviewStore:
                          binding(rec)))
             reasons.extend((key, r) for r in rs)
         with self._lock:
+            if self.sealed:
+                # Sealed decisions are frozen: never rewrite items; report any divergence instead.
+                current = dict(self._db.execute("SELECT key, binding FROM items WHERE present = 1").fetchall())
+                fresh = {r[0]: r[9] for r in rows}
+                diverged = sum(1 for k in current.keys() | fresh.keys() if current.get(k) != fresh.get(k))
+                self._set_meta("sealed_divergence", str(diverged))
+                return {"items": len(current), "stale": 0, "sealed_divergence": diverged}
             self._db.execute("BEGIN IMMEDIATE")
             try:
                 self._db.execute("UPDATE items SET present = 0")
@@ -376,6 +385,7 @@ class ReviewStore:
             "admin_attested_is_proof": False,
             "attestable": attestable,
             "stale": stale,
+            "sealed_divergence": int(self._meta("sealed_divergence") or 0),
             "viewed": viewed,
             "live": {"checked": n_items - live.get("NOT_CHECKED", 0), "by_status": dict(sorted(live.items()))},
             "audit_head": head[1],
@@ -388,7 +398,8 @@ class ReviewStore:
         if not isinstance(selection, dict):
             raise ReviewError("انتخاب نامعتبر است.", code="ownership.bad_selection")
         mode = selection.get("mode")
-        cols = "key, eligibility, review_state, binding, final_class, live_status, viewed, status_class, stale, reasons"
+        cols = ("key, eligibility, review_state, binding, final_class, live_status, viewed, status_class, stale,"
+                " reasons, batch_id")
         if mode == "keys":
             keys = selection.get("keys")
             if not isinstance(keys, list) or not keys or len(keys) > MAX_EXPLICIT_KEYS \
@@ -425,7 +436,7 @@ class ReviewStore:
             self._expire_plans()
             undo_of = None
             not_eligible: dict[str, int] = {}
-            changes: list[tuple[str, str, str, str]] = []
+            changes: list[tuple[str, str, str, str, str | None]] = []
             unchanged = 0
             superseded = 0
             risk_rows: list[tuple] = []
@@ -443,21 +454,22 @@ class ReviewStore:
                                       code="ownership.bad_selection")
                 rows = self._db.execute(
                     "SELECT bi.key, bi.from_state, bi.to_state, v.review_state, v.binding, v.eligibility,"
-                    " v.final_class, v.live_status, v.viewed, v.status_class, v.stale, v.reasons"
-                    " FROM batch_items bi JOIN v ON v.key = bi.key WHERE bi.batch_id = ? ORDER BY bi.key",
+                    " v.final_class, v.live_status, v.viewed, v.status_class, v.stale, v.reasons, v.batch_id"
+                    " FROM batch_items bi LEFT JOIN v ON v.key = bi.key WHERE bi.batch_id = ? ORDER BY bi.key",
                     (undo_of,)).fetchall()
                 selected = len(rows)
-                for key, frm, to, cur, bind, elig, fc, live, viewed, sc, stale, rs in rows:
-                    if cur != to or stale:
+                for key, frm, to, cur, bind, elig, fc, live, viewed, sc, stale, rs, cur_batch in rows:
+                    # superseded: item gone, decision made stale, or a later batch decided it since
+                    if cur is None or stale or cur_batch != undo_of or cur != to:
                         superseded += 1
                         continue
-                    changes.append((key, cur, frm, bind))
+                    changes.append((key, cur, frm, bind, cur_batch))
                     risk_rows.append((key, elig, cur, bind, fc, live, viewed, sc, stale, rs))
             else:
                 rows = self._select(selection)
                 selected = len(rows)
                 for r in rows:
-                    key, elig, cur, bind, fc, live, viewed, sc, stale, rs = r
+                    key, elig, cur, bind, fc, live, viewed, sc, stale, rs, cur_batch = r
                     if action == "APPROVE":
                         if elig == PROVEN:
                             not_eligible["ALREADY_PROVEN"] = not_eligible.get("ALREADY_PROVEN", 0) + 1
@@ -477,10 +489,14 @@ class ReviewStore:
                     if cur == target:
                         unchanged += 1
                         continue
-                    changes.append((key, cur, target, bind))
-                    risk_rows.append(r)
+                    changes.append((key, cur, target, bind, cur_batch))
+                    risk_rows.append(r[:10])
             risks = _risks(action, risk_rows, sum(not_eligible.values()),
                            stale=sum(1 for r in risk_rows if r[8]))
+            by_reason: dict[str, int] = {}
+            for r in risk_rows:
+                for code in json.loads(r[9] or "[]"):
+                    by_reason[code] = by_reason.get(code, 0) + 1
             unviewed = [r[0] for r in risk_rows if not r[6]]
             samples = [self.item(k) for k in unviewed[:SAMPLE_SIZE]]
             snapshot = hashlib.sha256(canonical_json([list(c) for c in changes])).hexdigest()
@@ -493,6 +509,7 @@ class ReviewStore:
                 "applicable": len(changes), "unchanged": unchanged, "superseded": superseded,
                 "not_eligible": {"total": sum(not_eligible.values()), "by_reason": dict(sorted(not_eligible.items()))},
                 "risks": risks,
+                "applicable_by_reason": dict(sorted(by_reason.items())),
                 "unreviewed": {"count": len(unviewed), "samples": [s for s in samples if s]},
                 "confirm": {"required_count": len(changes)},
                 "result_class": {"APPROVE": "ADMIN_ATTESTED", "REJECT": "REJECTED", "RESET": "PENDING",
@@ -504,8 +521,10 @@ class ReviewStore:
 
     def _expire_plans(self) -> None:
         now = _now()
-        for pid in [p for p, pl in self._plans.items() if pl.expires_at < now and pl.result is None]:
-            self._plans.pop(pid, None)
+        for pid in [p for p, pl in self._plans.items() if pl.expires_at < now]:
+            self._plans.pop(pid, None)  # committed plans replay from the database (batches.plan_id)
+        while len(self._plans) >= MAX_PLANS:
+            self._plans.pop(min(self._plans, key=lambda p: self._plans[p].created_at))
 
     # ---- commit -------------------------------------------------------------------------
     def commit(self, plan_id: str, *, confirm_count: Any, acknowledge: Any) -> dict[str, Any]:
@@ -515,10 +534,10 @@ class ReviewStore:
                 return {**plan.result, "idempotent_replay": True}
             row = self._db.execute("SELECT batch_id FROM batches WHERE plan_id = ?", (plan_id,)).fetchone() \
                 if isinstance(plan_id, str) else None
-            if row is not None:  # committed earlier (e.g. before a restart)
+            if row is not None:  # committed earlier (e.g. before a restart or by another session)
                 return {**self._batch_result(row[0]), "idempotent_replay": True}
-            self._require_open()
             if plan is None:
+                self._require_open()
                 raise ReviewError("برنامه این عملیات منقضی شده یا وجود ندارد؛ دوباره «پیش‌نمایش» بگیرید.",
                                   code="ownership.plan_expired", status=409)
             if plan.expires_at < _now():
@@ -531,41 +550,41 @@ class ReviewStore:
                     or confirm_count != len(plan.changes):
                 raise ReviewError("تعداد واردشده با تعداد مواردی که تغییر می‌کنند برابر نیست.",
                                   code="ownership.confirm_mismatch")
-            # every affected item must still be exactly as planned
-            current = self._current(k for k, *_ in plan.changes)
-            for key, frm, _to, bind in plan.changes:
-                if current.get(key) != (frm, bind):
-                    raise ReviewError("پس از پیش‌نمایش، وضعیت برخی موارد تغییر کرده است؛ دوباره پیش‌نمایش بگیرید.",
-                                      code="ownership.plan_stale", status=409)
             batch_id = "b-" + hashlib.sha256((self.import_id + plan.plan_id).encode()).hexdigest()[:16]
             now = _now()
+            # All checks that depend on stored state run inside the write transaction, so a second
+            # process or store on the same file cannot slip a decision or a seal in between.
             self._db.execute("BEGIN IMMEDIATE")
             try:
+                self._require_open()
+                current = self._current(k for k, *_ in plan.changes)
+                for key, frm, _to, bind, before in plan.changes:
+                    if current.get(key) != (frm, bind, before):
+                        raise ReviewError("پس از پیش‌نمایش، وضعیت برخی موارد تغییر کرده است؛ دوباره پیش‌نمایش بگیرید.",
+                                          code="ownership.plan_stale", status=409)
+                if plan.undo_of and self._db.execute("SELECT undone_by FROM batches WHERE batch_id = ?",
+                                                     (plan.undo_of,)).fetchone()[0]:
+                    raise ReviewError("این دسته قبلاً بازگردانده شده است.", code="ownership.already_undone",
+                                      status=409)
                 seq, head = self._head()
                 self._db.execute("INSERT INTO batches (batch_id, plan_id, action, note, created_at, applied, unchanged,"
                                  " superseded, undo_of, selection) VALUES (?,?,?,?,?,?,?,?,?,?)",
                                  (batch_id, plan.plan_id, plan.action, plan.note, now, len(plan.changes),
                                   plan.preview["unchanged"], plan.preview["superseded"], plan.undo_of,
                                   json.dumps(plan.selection, ensure_ascii=False, sort_keys=True)))
-                audit_rows = []
-                for key, frm, to, bind in plan.changes:
-                    self._db.execute(
-                        "INSERT INTO review (key, state, batch_id, binding, updated_at) VALUES (?,?,?,?,?)"
-                        " ON CONFLICT(key) DO UPDATE SET state=excluded.state, batch_id=excluded.batch_id,"
-                        " binding=excluded.binding, updated_at=excluded.updated_at", (key, to, batch_id, bind, now))
-                    seq += 1
-                    ev = {"seq": seq, "at": now, "action": plan.action, "batch_id": batch_id, "key": key,
-                          "from_state": frm, "to_state": to, "note": None}
-                    head = _event_hash(head, ev)
-                    audit_rows.append((seq, now, plan.action, batch_id, key, frm, to, None, "", head))
-                seq += 1
-                ev = {"seq": seq, "at": now, "action": "BATCH_" + plan.action, "batch_id": batch_id, "key": None,
-                      "from_state": None, "to_state": None, "note": plan.note}
-                head = _event_hash(head, ev)
-                audit_rows.append((seq, now, "BATCH_" + plan.action, batch_id, None, None, None, plan.note, "", head))
-                self._insert_audit(audit_rows)
+                self._db.executemany(
+                    "INSERT INTO review (key, state, batch_id, binding, updated_at) VALUES (?,?,?,?,?)"
+                    " ON CONFLICT(key) DO UPDATE SET state=excluded.state, batch_id=excluded.batch_id,"
+                    " binding=excluded.binding, updated_at=excluded.updated_at",
+                    [(key, to, batch_id, bind, now) for key, _f, to, bind, _b in plan.changes])
+                events = [{"action": plan.action, "batch_id": batch_id, "key": key, "from_state": frm,
+                           "to_state": to, "binding": bind, "note": None}
+                          for key, frm, to, bind, _b in plan.changes]
+                events.append({"action": "BATCH_" + plan.action, "batch_id": batch_id, "key": None,
+                               "from_state": None, "to_state": None, "binding": None, "note": plan.note})
+                self._append_audit(seq, head, now, events)
                 self._db.executemany("INSERT INTO batch_items (batch_id, key, from_state, to_state) VALUES (?,?,?,?)",
-                                     [(batch_id, k, f, t) for k, f, t, _b in plan.changes])
+                                     [(batch_id, k, f, t) for k, f, t, _bind, _b in plan.changes])
                 if plan.undo_of:
                     self._db.execute("UPDATE batches SET undone_by = ? WHERE batch_id = ?", (batch_id, plan.undo_of))
                 self._db.execute("COMMIT")
@@ -573,26 +592,31 @@ class ReviewStore:
                 self._db.execute("ROLLBACK")
                 raise
             plan.result = self._batch_result(batch_id)
+            plan.changes = []  # keep only the result for replay
             return {**plan.result, "idempotent_replay": False}
 
-    def _insert_audit(self, rows: list[tuple]) -> None:
-        # prev_hash is filled from the chain order
-        fixed = []
-        prev = self._head()[1]
-        for seq, at, action, batch_id, key, frm, to, note, _p, h in rows:
-            fixed.append((seq, at, action, batch_id, key, frm, to, note, prev, h))
-            prev = h
-        self._db.executemany("INSERT INTO audit (seq, at, action, batch_id, key, from_state, to_state, note,"
-                             " prev_hash, hash) VALUES (?,?,?,?,?,?,?,?,?,?)", fixed)
+    def _append_audit(self, seq: int, head: str, now: int, events: list[dict[str, Any]]) -> str:
+        rows = []
+        for ev in events:
+            seq += 1
+            full = {"seq": seq, "at": now, **ev}
+            h = _event_hash(head, full)
+            rows.append((seq, now, ev["action"], ev["batch_id"], ev["key"], ev["from_state"], ev["to_state"],
+                         ev["binding"], ev["note"], head, h))
+            head = h
+        self._db.executemany("INSERT INTO audit (seq, at, action, batch_id, key, from_state, to_state, binding, note,"
+                             " prev_hash, hash) VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows)
+        return head
 
-    def _current(self, keys: Iterable[str]) -> dict[str, tuple[str, str]]:
+    def _current(self, keys: Iterable[str]) -> dict[str, tuple[str, str, str | None]]:
         ks = list(keys)
-        out: dict[str, tuple[str, str]] = {}
+        out: dict[str, tuple[str, str, str | None]] = {}
         for i in range(0, len(ks), 500):
             part = ks[i:i + 500]
-            for k, st, b in self._db.execute(
-                    f"SELECT key, review_state, binding FROM v WHERE key IN ({','.join('?' * len(part))})", part):  # noqa: S608 - fixed columns, "?" placeholders only
-                out[k] = (st, b)
+            for k, st, b, batch in self._db.execute(
+                    f"SELECT key, review_state, binding, batch_id FROM v WHERE key IN ({','.join('?' * len(part))})",  # noqa: S608 - placeholders only
+                    part):
+                out[k] = (st, b, batch)
         return out
 
     def _head(self) -> tuple[int, str]:
@@ -620,42 +644,59 @@ class ReviewStore:
         return {"total": total, "items": [_audit_row(r) for r in rows]}
 
     def verify_audit(self) -> dict[str, Any]:
+        """Recompute the hash chain AND replay it: the stored decisions must be exactly what the
+        audited events produced (a row written outside the chain is detected), and a sealed store must
+        still end with its recorded SEAL event."""
         prev = GENESIS
         n = 0
+        replay: dict[str, tuple[str, str | None, str | None]] = {}
+        last_action = None
         with self._lock:
-            for seq, at, action, batch_id, key, frm, to, note, prev_hash, h in self._db.execute(
-                    "SELECT seq, at, action, batch_id, key, from_state, to_state, note, prev_hash, hash FROM audit"
-                    " ORDER BY seq"):
+            for seq, at, action, batch_id, key, frm, to, bind, note, prev_hash, h in self._db.execute(
+                    "SELECT seq, at, action, batch_id, key, from_state, to_state, binding, note, prev_hash, hash"
+                    " FROM audit ORDER BY seq"):
                 n += 1
                 ev = {"seq": seq, "at": at, "action": action, "batch_id": batch_id, "key": key, "from_state": frm,
-                      "to_state": to, "note": note}
+                      "to_state": to, "binding": bind, "note": note}
                 if prev_hash != prev or _event_hash(prev, ev) != h or seq != n:
-                    return {"ok": False, "events": n, "broken_at": seq, "head": prev}
+                    return {"ok": False, "events": n, "broken_at": seq, "head": prev, "reason": "chain"}
+                if key is not None:
+                    replay[key] = (to, batch_id, bind)
                 prev = h
+                last_action = action
+            stored = {k: (st, b, bd) for k, st, b, bd in
+                      self._db.execute("SELECT key, state, batch_id, binding FROM review")}
+            if stored != replay:
+                bad = sorted(k for k in stored.keys() | replay.keys() if stored.get(k) != replay.get(k))
+                return {"ok": False, "events": n, "head": prev, "reason": "state_mismatch", "mismatched": len(bad)}
+            sealed_head = self._meta("sealed_head")
+            if (sealed_head is not None or self._meta("sealed_at") is not None) and \
+                    (sealed_head != prev or last_action != "SEAL"):
+                return {"ok": False, "events": n, "head": prev, "reason": "seal_anchor"}
         return {"ok": True, "events": n, "head": prev}
 
     # ---- seal ---------------------------------------------------------------------------
     def seal(self, *, confirm: Any, confirm_count: Any) -> dict[str, Any]:
         with self._lock:
-            self._require_open()
-            total = self._db.execute("SELECT COUNT(*) FROM v").fetchone()[0]
-            if confirm != "SEAL" or confirm_count != total or isinstance(confirm_count, bool):
-                raise ReviewError("برای قفل‌کردن، عبارت SEAL و تعداد کل سرویس‌ها را دقیق وارد کنید.",
-                                  code="ownership.confirm_mismatch")
-            if not self.verify_audit()["ok"]:
-                raise ReviewError("زنجیره ممیزی معتبر نیست؛ قفل‌کردن ممکن نیست.", code="ownership.audit_broken",
-                                  status=409)
-            now = _now()
             self._db.execute("BEGIN IMMEDIATE")
             try:
+                self._require_open()
+                total = self._db.execute("SELECT COUNT(*) FROM v").fetchone()[0]
+                if confirm != "SEAL" or confirm_count != total or isinstance(confirm_count, bool):
+                    raise ReviewError("برای قفل‌کردن، عبارت SEAL و تعداد کل سرویس‌ها را دقیق وارد کنید.",
+                                      code="ownership.confirm_mismatch")
+                if not self.verify_audit()["ok"]:
+                    raise ReviewError("زنجیره ممیزی معتبر نیست؛ قفل‌کردن ممکن نیست.", code="ownership.audit_broken",
+                                      status=409)
+                now = _now()
                 seq, head = self._head()
-                ev = {"seq": seq + 1, "at": now, "action": "SEAL", "batch_id": None, "key": None, "from_state": None,
-                      "to_state": None, "note": None}
-                h = _event_hash(head, ev)
-                self._db.execute("INSERT INTO audit (seq, at, action, batch_id, key, from_state, to_state, note,"
-                                 " prev_hash, hash) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                                 (seq + 1, now, "SEAL", None, None, None, None, None, head, h))
+                digest = _entries_digest(self._entries())
+                head = self._append_audit(seq, head, now, [{"action": "SEAL", "batch_id": None, "key": None,
+                                                            "from_state": None, "to_state": None, "binding": None,
+                                                            "note": digest}])
                 self._set_meta("sealed_at", str(now))
+                self._set_meta("sealed_head", head)
+                self._set_meta("sealed_digest", digest)
                 self._db.execute("COMMIT")
             except BaseException:
                 self._db.execute("ROLLBACK")
@@ -683,25 +724,37 @@ class ReviewStore:
                                                     (panel_code,))]
 
     # ---- export -------------------------------------------------------------------------
-    def export_document(self, *, source_fingerprint: str | None = None) -> dict[str, Any]:
+    def _entries(self) -> list[dict[str, Any]]:
+        rows = self._db.execute(f"SELECT {', '.join(_ITEM_COLS)} FROM v ORDER BY key").fetchall()  # noqa: S608 - fixed columns
+        entries = []
+        for r in rows:
+            it = _row_to_item(r)
+            entries.append({"key": it["key"], "invoice_key": it["invoice_key"], "class": it["final_class"],
+                            "basis": it["basis"], "review_state": it["review_state"], "batch_id": it["batch_id"],
+                            "binding": dict(zip(_ITEM_COLS, r, strict=True))["binding"], "stale": it["stale"]})
+        return entries
+
+    def export_document(self, *, source_fingerprint: str | None = None,
+                        package_header_sha256: str | None = None) -> dict[str, Any]:
         with self._lock:
             summ = self.summary()
-            rows = self._db.execute(f"SELECT {', '.join(_ITEM_COLS)} FROM v ORDER BY key").fetchall()  # noqa: S608 - fixed columns, "?" placeholders only
+            entries = self._entries()
             ver = self.verify_audit()
-            entries = []
-            for r in rows:
-                it = _row_to_item(r)
-                entries.append({"key": it["key"], "invoice_key": it["invoice_key"], "class": it["final_class"],
-                                "basis": it["basis"], "review_state": it["review_state"], "batch_id": it["batch_id"],
-                                "binding": dict(zip(_ITEM_COLS, r, strict=True))["binding"], "stale": it["stale"]})
+            digest = _entries_digest(entries)
+            sealed_digest = self._meta("sealed_digest")
         return {
             "schema": EXPORT_SCHEMA,
             "review_version": REVIEW_VERSION,
             "import_id": self.import_id,
             "source_fingerprint": source_fingerprint or self._meta("source_fingerprint") or None,
+            "package_header_sha256": package_header_sha256,
             "sealed": summ["sealed"],
             "sealed_at": summ["sealed_at"],
-            "audit": {"ok": ver["ok"], "events": ver["events"], "head": ver["head"]},
+            "sealed_digest": sealed_digest,
+            "entries_digest": digest,
+            "matches_seal": sealed_digest == digest if sealed_digest else None,
+            "sealed_divergence": summ.get("sealed_divergence"),
+            "audit": {"ok": ver["ok"], "events": ver["events"], "head": ver["head"], "reason": ver.get("reason")},
             "summary": {k: summ["totals"][k] for k in ("items", *FINAL_CLASSES)},
             "admin_attestation_is_proof": False,
             "rules": {"approve_target": "invoice.id_user only", "serious_reasons": sorted(SERIOUS_REASONS)},
@@ -710,6 +763,10 @@ class ReviewStore:
 
 
 # ---- helpers ----------------------------------------------------------------------------------
+
+def _entries_digest(entries: list[dict[str, Any]]) -> str:
+    return hashlib.sha256(canonical_json(entries)).hexdigest()
+
 
 def _audit_row(r: tuple) -> dict[str, Any]:
     return dict(zip(("seq", "at", "action", "batch_id", "key", "from_state", "to_state", "note", "hash"), r,
@@ -727,7 +784,10 @@ def _selection_record(selection: dict[str, Any]) -> dict[str, Any]:
     """What is stored about a selection (keys are summarised by count to keep the batch row small)."""
     if not isinstance(selection, dict):
         return {}
-    out = {k: v for k, v in selection.items() if k in {"mode", "filter", "batch_id"}}
+    out: dict[str, Any] = {k: selection[k] for k in ("mode", "batch_id") if isinstance(selection.get(k), str)}
+    flt = selection.get("filter")
+    if isinstance(flt, dict):  # only the validated filter fields, never arbitrary client data
+        out["filter"] = {k: flt[k] for k in (*FILTER_FIELDS, "q") if k in flt}
     if isinstance(selection.get("keys"), list):
         out["keys_count"] = len(selection["keys"])
     if isinstance(selection.get("exclude_keys"), list):

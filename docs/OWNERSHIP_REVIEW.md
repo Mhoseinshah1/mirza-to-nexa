@@ -44,7 +44,8 @@ the importer contract all carry it as a separate class (`basis: ADMIN_ATTESTATIO
    will change (typed by the administrator) and an explicit acknowledgement. If any affected item
    changed since the plan, the commit is refused (`ownership.plan_stale`).
 
-Commits are applied in one SQLite transaction (chunked), so 5,000+ services take well under a
+The plan also breaks the affected items down by ambiguity reason (`applicable_by_reason`).
+Commits are applied in one SQLite transaction, so 5,000+ services take well under a
 second. Re-sending the same commit returns the same batch (`idempotent_replay: true`); an item
 already in the target state is counted as unchanged.
 
@@ -53,9 +54,16 @@ already in the target state is counted as unchanged.
 * Every change is an append-only audit event chained with SHA-256 (`prev_hash` → `hash`);
   `GET .../ownership/audit/verify` recomputes the chain.
 * A batch can be undone (plan with `selection.mode = "batch"`, action `UNDO`): each item returns
-  to its state before the batch, unless a later decision has superseded it (counted, not changed).
+  to its state before the batch only if **that batch** still made the item's current decision; an
+  item decided again later (even to the same state), made stale or gone is counted as superseded.
+* `verify` recomputes the hash chain **and** replays it: the stored decisions must equal what the
+  audited events produced (each item event carries the record binding), and a sealed store must
+  still end with its recorded `SEAL` event.
 * **Seal** freezes the decisions for the final import. After sealing nothing can change (`409
-  ownership.sealed`). Until then every decision is reversible.
+  ownership.sealed`), a re-conversion cannot rewrite the items (divergence is only reported as
+  `sealed_divergence`), and the digest of the sealed entries is kept so the export states
+  `matches_seal`. Until then every decision is reversible. State checks of a commit or seal run inside
+  the database write transaction, and all jobs of one import share one store.
 * Decisions are bound to the ownership record (`binding` = SHA-256 of the canonical record). If a
   newer conversion produces a different record for the same service, the old decision is marked
   `stale` and is not exported as valid.
@@ -71,7 +79,8 @@ staged records only while that job exists. Notes are free text: do not type cust
 
 Optional and **off by default** (setting `panel_live_check_enabled`). The administrator enters the
 panel URL and an admin login for one Mirza panel code; they are held only in memory for that run.
-Only Marzban-type panels are supported, and the HTTP client allows exactly two requests:
+Only Marzban-type panels are supported; `https` is required (plain `http` only for a loopback
+address), and the HTTP client allows exactly two requests:
 `POST /api/admin/token` (login) and `GET /api/user/{username}`. Redirects are refused. Only the
 resulting status class is stored (`LIVE_ACTIVE`, `LIVE_DISABLED`, `LIVE_LIMITED`, `LIVE_EXPIRED`,
 `LIVE_ON_HOLD`, `NOT_FOUND_ON_PANEL`, `CHECK_ERROR`, `UNSUPPORTED_PANEL`). A live status is a
@@ -82,12 +91,13 @@ In this phase tests use a local fake panel on 127.0.0.1; no real panel is contac
 ## 6. Export for the importer
 
 `ownership-decisions.json` (`schema: m2n.ownership_decisions.v1`): `import_id`,
-`source_fingerprint`, `sealed`, `audit_head`, summary by class and one entry per service
+`source_fingerprint`, `package_header_sha256` (binds the file to one package), `sealed`,
+`sealed_digest` / `entries_digest` / `matches_seal`, the audit result, summary by class and one entry per service
 (`key`, `invoice_key`, `class`, `basis`, `batch_id`, `binding`, `stale`). It is authenticated with
 HMAC-SHA256 under a key derived from the package secret (HKDF info
 `nxpkg-v1/ownership-decisions`), so only a holder of the package key can produce or verify it.
-The importer must refuse an export that is unsigned, unsealed, for another `import_id`, or whose
-bindings do not match the package records, and must treat `ADMIN_ATTESTATION` separately from
+The importer must refuse an export that is unsigned, unsealed, not `matches_seal`, for another
+`import_id` or package header, with `audit.ok` false, or whose bindings do not match the package records, and must treat `ADMIN_ATTESTATION` separately from
 proven ownership.
 
 ## 7. HTTP API (all under `/api/jobs/{job_id}/ownership`, same localhost/CSRF guard)

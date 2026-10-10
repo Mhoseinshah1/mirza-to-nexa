@@ -6,6 +6,7 @@ Host/Origin/session/CSRF guard. See ``docs/OWNERSHIP_REVIEW.md``.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 import time
@@ -21,6 +22,7 @@ from starlette.concurrency import run_in_threadpool
 from . import ownership_review as orv
 from .errors import MigrationError
 from .jobs import Job, JobManager
+from .nxpkg.crypto import read_header_from
 from .panel_probe import ProbeError, ReadOnlyViolation, make_probe
 from .settings import app_dir
 
@@ -68,8 +70,12 @@ class Session:
 
 
 class Sessions:
+    """One session per job, but ONE shared store per import: two jobs converted from the same
+    backup write to the same decisions, so they must share the same lock and plans."""
+
     def __init__(self) -> None:
         self._by_job: dict[str, Session] = {}
+        self._stores: dict[str, orv.ReviewStore] = {}
         self._lock = threading.Lock()
 
     def get(self, job: Job) -> Session:
@@ -77,19 +83,33 @@ class Sessions:
             s = self._by_job.get(job.id)
             if s is not None:
                 return s
-            s = _open_session(job)
+            s = _open_session(job, self._store_locked)
             self._by_job[job.id] = s
             return s
 
+    def _store_locked(self, import_id: str, fingerprint: str | None = None) -> orv.ReviewStore:
+        st = self._stores.get(import_id)
+        if st is None:
+            st = orv.ReviewStore.for_import(reviews_dir(), import_id, fingerprint)
+            self._stores[import_id] = st
+        return st
+
     def existing_store(self, import_id: str | None) -> orv.ReviewStore | None:
+        """The shared store for ``import_id`` if a decisions file exists (never creates one)."""
+        if not isinstance(import_id, str) or not import_id:
+            return None
         with self._lock:
-            for s in self._by_job.values():
-                if s.store.import_id == import_id:
-                    return s.store
-        return None
+            if import_id in self._stores:
+                return self._stores[import_id]
+            if not (reviews_dir() / f"{import_id}.sqlite").exists():
+                return None
+            try:
+                return self._store_locked(import_id)
+            except MigrationError:
+                return None
 
 
-def _open_session(job: Job) -> Session:
+def _open_session(job: Job, store_for: Callable[..., orv.ReviewStore]) -> Session:
     if job.status != "completed" or not job.summary:
         raise orv.ReviewError("ابتدا تبدیل باید کامل شود.", code="ownership.not_ready", status=404)
     stage = job.workspace / "stage"
@@ -115,7 +135,7 @@ def _open_session(job: Job) -> Session:
     for p in orv.iter_jsonl(stage / "records" / "panel_registry.jsonl"):
         if p.get("code_panel"):
             panel_types[p["code_panel"]] = (p.get("panel_type") or {}).get("normalized")
-    store = orv.ReviewStore.for_import(reviews_dir(), job.summary["import_id"], job.summary.get("source_fingerprint"))
+    store = store_for(job.summary["import_id"], job.summary.get("source_fingerprint"))
     store.sync(records, orv.load_invoice_index(stage))
     return Session(store=store, stage_dir=stage, offsets=offsets, panel_types=panel_types)
 
@@ -158,21 +178,8 @@ def readiness_overlay(sessions: Sessions, data: dict[str, Any]) -> dict[str, Any
     """Add the administrator's review state to a readiness document, kept apart from proof."""
     store = sessions.existing_store(data.get("import_id"))
     if store is None:
-        p = reviews_dir() / f"{data.get('import_id')}.sqlite"
-        if not data.get("import_id") or not p.exists():
-            return data
-        try:
-            store = orv.ReviewStore.for_import(reviews_dir(), data["import_id"])
-        except MigrationError:
-            return data
-        close = True
-    else:
-        close = False
-    try:
-        s = store.summary()
-    finally:
-        if close:
-            store.close()
+        return data
+    s = store.summary()
     own = dict(data.get("ownership") or {})
     own["admin_review"] = {
         "proven": s["totals"]["PROVEN"], "admin_attested": s["totals"]["ADMIN_ATTESTED"],
@@ -320,8 +327,11 @@ def register(app: FastAPI, manager: JobManager, job_or_404: Callable[[str], Job 
                                     passphrase=passphrase)
         except MigrationError as e:
             raise orv.ReviewError(e.message_fa, code=e.code, status=403) from None
-        doc = orv.sign_export(s.store.export_document(source_fingerprint=(job.summary or {}).get("source_fingerprint")),
-                              key)
+        with open(job.package_path, "rb") as fh:
+            _, header_bytes = read_header_from(fh)
+        doc = orv.sign_export(s.store.export_document(
+            source_fingerprint=(job.summary or {}).get("source_fingerprint"),
+            package_header_sha256=hashlib.sha256(header_bytes).hexdigest()), key)
         body = json.dumps(doc, ensure_ascii=False, indent=1, sort_keys=True) + "\n"
         return Response(body.encode("utf-8"), media_type="application/json; charset=utf-8", headers={
             "Content-Disposition": f'attachment; filename="ownership-decisions-{s.store.import_id[:12]}.json"'})
@@ -399,7 +409,7 @@ def register(app: FastAPI, manager: JobManager, job_or_404: Callable[[str], Job 
             except ProbeError as e:
                 return _err(400, e.code, e.message_fa)
             try:
-                keys = s.store.keys_for_live(code, body.get("selection") or None)
+                keys = await run_in_threadpool(s.store.keys_for_live, code, body.get("selection") or None)
             except MigrationError as e:
                 probe.close()
                 return _review_err(e)

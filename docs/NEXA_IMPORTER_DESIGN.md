@@ -215,7 +215,8 @@ An optional companion file produced by the converter's bulk ownership review. Th
 
 1. refuses it unless `schema == m2n.ownership_decisions.v1`, its HMAC verifies under
    `HKDF-SHA256(package secret, info = "nxpkg-v1/ownership-decisions")`, `import_id` and
-   `source_fingerprint` equal the package manifest, `sealed == true` and `audit.ok == true`;
+   `source_fingerprint` equal the package manifest, `package_header_sha256` equals the SHA-256 of the
+   package header bytes, `sealed == true`, `matches_seal == true` and `audit.ok == true`;
 2. matches every entry to `records/service_ownership.jsonl` by `key` and refuses the file if any
    `binding` differs from `SHA-256(canonical record)` (decision made on a different record);
 3. applies classes as follows, never merging them:

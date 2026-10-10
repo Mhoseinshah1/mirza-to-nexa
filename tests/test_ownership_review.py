@@ -310,3 +310,99 @@ def test_export_signed_with_package_key(tmp_path, store):
     with pytest.raises(WrongPackageKey):
         orv.decisions_key(res.package_path, key_text=generate_key_file())
     assert orv.decisions_key(res.package_path, key_text=res.key_text) == key
+
+
+# ---- regressions from the independent review ------------------------------------------------------
+
+def _commit(store, action, keys):
+    p = store.plan(action, {"mode": "keys", "keys": keys})
+    return store.commit(p["plan_id"], confirm_count=p["applicable"], acknowledge=True)
+
+
+def test_undo_never_resurrects_a_decision_replaced_later(store):
+    recs = load(store, n_attest=2)
+    x = recs[0]["idempotency_key"]
+    _commit(store, "APPROVE", [x])
+    a = _commit(store, "REJECT", [x])          # batch A: APPROVED -> REJECTED
+    _commit(store, "RESET", [x])
+    _commit(store, "REJECT", [x])              # latest decision, made by another batch
+    undo = store.plan("UNDO", {"mode": "batch", "batch_id": a["batch_id"]})
+    assert undo["applicable"] == 0 and undo["superseded"] == 1
+    assert store.item(x)["final_class"] == "REJECTED"
+
+    y = recs[1]["idempotency_key"]
+    b1 = _commit(store, "APPROVE", [y])
+    _commit(store, "RESET", [y])
+    _commit(store, "APPROVE", [y])             # same state as b1 set, but a later batch made it
+    assert store.plan("UNDO", {"mode": "batch", "batch_id": b1["batch_id"]})["superseded"] == 1
+    assert store.item(y)["final_class"] == "ADMIN_ATTESTED"
+
+
+def test_two_stores_on_one_file_cannot_race(tmp_path):
+    base = tmp_path / "reviews"
+    a = orv.ReviewStore.for_import(base, "aa" * 32)
+    recs = load(a, n_attest=3)
+    b = orv.ReviewStore.for_import(base, "aa" * 32)
+    k = recs[0]["idempotency_key"]
+    pa = a.plan("APPROVE", {"mode": "keys", "keys": [k]})
+    pb = b.plan("REJECT", {"mode": "keys", "keys": [k]})
+    b.commit(pb["plan_id"], confirm_count=1, acknowledge=True)
+    with pytest.raises(orv.ReviewError) as e:
+        a.commit(pa["plan_id"], confirm_count=1, acknowledge=True)
+    assert e.value.code == "ownership.plan_stale"
+    pa2 = a.plan("APPROVE", {"mode": "keys", "keys": [recs[1]["idempotency_key"]]})
+    b.seal(confirm="SEAL", confirm_count=b.summary()["totals"]["items"])
+    with pytest.raises(orv.ReviewError) as e:
+        a.commit(pa2["plan_id"], confirm_count=1, acknowledge=True)
+    assert e.value.code == "ownership.sealed"
+    assert a.verify_audit()["ok"]
+    a.close()
+    b.close()
+
+
+def test_sealed_store_is_frozen_against_resync(store):
+    recs = load(store, n_attest=3)
+    _commit(store, "APPROVE", [recs[0]["idempotency_key"]])
+    store.seal(confirm="SEAL", confirm_count=store.summary()["totals"]["items"])
+    before = store.summary()["totals"]
+    changed = [{**r, "ownership_evidence_total": 5} for r in recs]
+    res = store.sync(changed, invoices(changed))
+    assert res["sealed_divergence"] == len(recs)
+    s = store.summary()
+    assert s["totals"] == before and s["sealed_divergence"] == len(recs)
+    doc = store.export_document()
+    assert doc["matches_seal"] is True and doc["sealed_digest"] == doc["entries_digest"]
+    assert store.verify_audit()["ok"]
+
+
+def test_audit_replay_detects_rows_written_outside_the_chain(store):
+    recs = load(store, n_attest=3)
+    _commit(store, "APPROVE", [recs[0]["idempotency_key"]])
+    db = sqlite3.connect(str(store.path))
+    db.execute("INSERT INTO review (key, state, batch_id, binding, updated_at) VALUES (?, 'APPROVED', 'b-x', ?, 0)",
+               (recs[1]["idempotency_key"], orv.binding(recs[1])))
+    db.commit()
+    v = store.verify_audit()
+    assert v["ok"] is False and v["reason"] == "state_mismatch"
+    db.execute("DELETE FROM review WHERE batch_id = 'b-x'")
+    db.commit()
+    assert store.verify_audit()["ok"]
+    store.seal(confirm="SEAL", confirm_count=store.summary()["totals"]["items"])
+    db.execute("DELETE FROM audit WHERE action = 'SEAL'")  # truncating the seal is detected
+    db.commit()
+    db.close()
+    assert store.verify_audit()["reason"] == "seal_anchor"
+
+
+def test_plan_breaks_down_reasons_and_stores_only_known_filter_fields(store):
+    recs = [rec(i, reasons=("OWNERSHIP_OWNER_MISMATCH_NO_TRANSFER_RECORD",)) for i in range(4)]
+    recs += [rec(10 + i) for i in range(2)]
+    store.sync(recs, invoices(recs))
+    p = store.plan("APPROVE", {"mode": "filter", "filter": {"eligibility": ["ATTESTABLE"], "junk": "x" * 50},
+                               "exclude_keys": []})
+    assert p["applicable_by_reason"] == {"OWNERSHIP_ACTION_OUTSIDE_HOLDING_WINDOW": 2,
+                                         "OWNERSHIP_OWNER_MISMATCH_NO_TRANSFER_RECORD": 4}
+    res = store.commit(p["plan_id"], confirm_count=6, acknowledge=True)
+    sel = sqlite3.connect(str(store.path)).execute("SELECT selection FROM batches WHERE batch_id = ?",
+                                                   (res["batch_id"],)).fetchone()[0]
+    assert "junk" not in sel and json.loads(sel)["filter"] == {"eligibility": ["ATTESTABLE"]}

@@ -211,6 +211,7 @@ def test_review_flow_over_http(api):
     assert ex.status_code == 200 and "attachment" in ex.headers["content-disposition"]
     doc = ex.json()
     assert doc["authentication"]["alg"] == "HMAC-SHA256" and doc["sealed"] is False
+    assert len(doc["package_header_sha256"]) == 64 and doc["audit"]["ok"] is True
 
     total = client.get(base + "/summary").json()["totals"]["items"]
     assert client.post(base + "/seal", json={"confirm": "SEAL", "confirm_count": total}, headers=h).json()["sealed"]
@@ -245,3 +246,15 @@ def test_live_check_disabled_by_default_then_read_only(api, panel):
     assert items["total"] >= 1
     # live status is a risk signal in the plan, never a change of ownership class
     assert s["totals"]["ADMIN_ATTESTED"] == 0
+
+
+def test_dot_usernames_and_cleartext_logins_are_refused(panel):
+    probe = pp.make_probe("marzban", panel.url, "admin", "pw")
+    assert probe.check("..") == "CHECK_ERROR" and probe.check(".") == "CHECK_ERROR"
+    assert not any(p.endswith("/..") or p.endswith("/.") for _, p in panel.requests)
+    with pytest.raises(pp.ProbeError) as e:
+        pp.make_probe("marzban", "http://203.0.113.9:8000", "admin", "pw")
+    assert e.value.code == "panel.https_required"
+    for bad in ("http://h\r\nX: y", "https://h/../x", "https://h/a b"):
+        with pytest.raises(pp.ProbeError):
+            pp.validate_base_url(bad)
