@@ -1,0 +1,76 @@
+"""Launcher: start the local server on 127.0.0.1 and open the browser.
+
+Usage::
+
+    mirza2nexa                # pick a free port, open the browser
+    mirza2nexa --port 8765 --no-browser
+    mirza2nexa convert backup.zip -o out.nxpkg   # headless CLI (see cli.py)
+"""
+
+from __future__ import annotations
+
+import argparse
+import secrets
+import socket
+import sys
+import threading
+import webbrowser
+
+BIND_HOST = "127.0.0.1"  # never configurable: the app must not listen on other interfaces
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((BIND_HOST, 0))
+        return s.getsockname()[1]
+
+
+def serve(port: int | None = None, open_browser: bool = True, launch_token: str | None = None) -> None:
+    import uvicorn
+
+    from .jobs import JobManager
+    from .pipeline import run_job
+    from .server import create_app
+    from .settings import Settings
+
+    port = port or _free_port()
+    token = launch_token or secrets.token_urlsafe(24)
+    manager = JobManager(Settings.load(), run_job)
+    app = create_app(manager, port=port, launch_token=token)
+    url = f"http://{BIND_HOST}:{port}/?t={token}"
+
+    config = uvicorn.Config(app, host=BIND_HOST, port=port, log_level="warning", access_log=False,
+                            server_header=False, date_header=False, timeout_keep_alive=30)
+    server = uvicorn.Server(config)
+
+    def _open() -> None:
+        if open_browser:
+            webbrowser.open(url)
+
+    print("Mirza → NEXA Migration Studio")
+    print(f"آدرس برنامه (فقط روی همین کامپیوتر): {url}")
+    print("برای خروج این پنجره را ببندید یا Ctrl+C بزنید.")
+    sys.stdout.flush()
+    threading.Timer(0.8, _open).start()
+    try:
+        server.run()
+    finally:
+        manager.shutdown()
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] in {"convert", "verify", "compare", "synth"}:
+        from .cli import main as cli_main
+
+        return cli_main(argv)
+    parser = argparse.ArgumentParser(prog="mirza2nexa")
+    parser.add_argument("--port", type=int, default=None)
+    parser.add_argument("--no-browser", action="store_true")
+    args = parser.parse_args(argv)
+    serve(args.port, open_browser=not args.no_browser)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
