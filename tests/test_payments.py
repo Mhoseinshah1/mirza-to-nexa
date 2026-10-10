@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import zipfile
 from pathlib import Path
 
@@ -168,21 +169,55 @@ def test_money_unit_evidence_is_statistics_only(tmp_path):
     ev = res.report["reconciliation"]["money_unit_evidence"]
     assert ev["decision"] == "OWNER" and ev["configured_unit"] == "toman"
     d = ev["distributions"]
+    # per-customer amounts: no min/max; too few values for even rounded quantiles
     assert d["payment_customer_paid"] == {
-        "positive_values": 5, "zero_values": 0, "unparsed_values": 1, "min": "5000", "p10": "5000", "p50": "70000",
-        "p90": "100000", "max": "500000", "share_multiple_of_10": "1.0000", "share_multiple_of_100": "1.0000",
-        "share_multiple_of_1000": "1.0000"}
+        "positive_values": 5, "zero_values": 0, "unparsed_values": 1, "p10": None, "p50": None, "p90": None,
+        "per_customer_values": True, "quantiles": "WITHHELD_FEWER_THAN_20_VALUES", "min_max": "NOT_REPORTED",
+        "share_multiple_of_10": "1.0000", "share_multiple_of_100": "1.0000", "share_multiple_of_1000": "1.0000"}
+    assert d["product_price"]["min"] == "50000" and d["product_price"]["max"] == "100000"  # prices stay exact
     assert d["payment_admin_adjustment"]["positive_values"] == 1
     assert d["product_price"]["positive_values"] == 2 and d["product_price"]["unparsed_values"] == 1
     x = ev["cross_checks"]["payment_customer_paid_vs_product_price"]
     # 50000, 100000 equal; 500000 = 10 x 50000; 5000 = 50000 / 10; 70000 matches nothing
     assert (x["equal_to_a_reference_value"], x["equal_to_10x_a_reference_value"],
             x["equal_to_a_reference_value_div_10"]) == (2, 1, 1)
-    assert x["share_equal"] == "0.4000" and x["median_ratio"] == "1.4000"
+    assert x["share_equal"] == "0.4000" and x["median_ratio"] is None  # the payment median is withheld
     assert ev["cross_checks"]["invoice_price_vs_product_price"] is None  # no invoice table
     assert ev["code_evidence"] and "Toman" in ev["explanation"]
     # observations never change an amount
     assert {r["amount"]["amount_minor"] for r in recs(res) if r["payment_id"] == "3"} == {"500000"}
+
+
+def test_round_sig2():
+    assert [payments.round_sig2(v) for v in (7, 99, 100, 149, 150, 12345, 123456789, 995, 9950)] == \
+        [7, 99, 100, 150, 150, 12000, 120000000, 1000, 10000]
+
+
+def test_money_unit_evidence_has_no_exact_per_customer_value(tmp_path):
+    # 25 customers with distinctive balances and wallet amounts, 25 distinctive payments
+    users = ",".join(f"('71000001{i:02d}',1,'{123457 + i * 1013}','Active')" for i in range(25))
+    wallet = ("CREATE TABLE `wallet_transaction` (`id` bigint NOT NULL, `id_user` varchar(200), `amount` bigint, "
+              "`balance_before` bigint, `balance_after` bigint, `created_at` datetime, PRIMARY KEY (`id`));\n"
+              "INSERT INTO `wallet_transaction` VALUES " + ",".join(
+                  f"({i + 1},'71000001{i:02d}',{98761 + i * 777},0,{98761 + i * 777},'2025-01-01 10:00:00')"
+                  for i in range(25)) + ";\n")
+    rows = [pay_row(i + 1, uid=f"71000001{i:02d}", price=str(54321 + i * 919)) for i in range(25)]
+    rows.append(pay_row(99, uid="7100000100", price="76543", method="add balance by admin"))
+    res = convert(tmp_path, rows, extra="INSERT INTO `user` VALUES " + users + ";\n" + wallet)
+    d = res.report["reconciliation"]["money_unit_evidence"]["distributions"]
+    exact = {str(123457 + i * 1013) for i in range(25)} | {str(98761 + i * 777) for i in range(25)} \
+        | {str(54321 + i * 919) for i in range(25)} | {"76543"}
+    for src in ("user_balance_nonzero_abs", "wallet_transaction_amount_abs", "payment_customer_paid",
+                "payment_admin_adjustment"):
+        dd = d[src]
+        assert "min" not in dd and "max" not in dd and dd["min_max"] == "NOT_REPORTED", src
+        assert not exact & {str(v) for v in dd.values()}, src
+    assert d["user_balance_nonzero_abs"]["positive_values"] == 28  # 25 + the 3 non-zero base users
+    assert d["wallet_transaction_amount_abs"]["p50"] == "110000"   # 98761 + 12 * 777 = 108085 → 2 digits
+    assert d["payment_admin_adjustment"]["p50"] is None             # one value: withheld
+    text = json.dumps(res.report["reconciliation"]["money_unit_evidence"])
+    for v in exact:
+        assert f'"{v}"' not in text, v
 
 
 def test_unknown_method_maps_to_unknown(tmp_path):

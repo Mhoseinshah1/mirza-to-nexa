@@ -39,6 +39,7 @@ from .payments import (
     FMT_SQL_DATETIME,
     FMT_UNIX,
     METHOD_VOCAB,
+    STATUS_VOCAB,
     WALLET_CAUSE_LAST_TX,
     ZONE_NOTE,
     BoundedReviews,
@@ -529,9 +530,12 @@ def _convert(ctx: ModuleContext, stats) -> None:
 # Evidence-based only. A difference is put in a cause category with a certainty:
 #   PROVEN      delta = snapshot - last balance_after equals EXACTLY the signed sum of the evidenced
 #               balance-changing events placed after the last history row, and no event is uncertain
-#               (in the time window, unplaceable, unquantified or with an unreadable amount);
-#   PROBABLE    some evidence fits (an exact sum that needs uncertain events, a 10x unit pattern, a
-#               tied last timestamp) or activity exists after the history but does not add up;
+#               (in the time window, unplaceable, unquantified, of an unknown status or with an
+#               unreadable amount) and every evidence source was read (``USED``); for an unprovable
+#               order: EVERY row that could be the final one ends at the snapshot;
+#   PROBABLE    some evidence fits (an exact sum that needs uncertain events or misses a source, a 10x
+#               unit pattern, only SOME possible final rows end at the snapshot) or activity exists
+#               after the history but does not add up;
 #   UNEXPLAINED no observable evidence at all.
 # The opening balance (user.Balance) is never changed and no event is ever re-applied.
 DIFF_SCHEMA = "mirza.wallet_transaction.difference.v1"
@@ -549,8 +553,11 @@ GROUPS = ("TOPUP", "ADMIN_ADJUSTMENT", "PURCHASE", "SERVICE_OPERATION", "WHEEL_P
 GROUP_CAUSE = {"TOPUP": "UNLOGGED_TOPUPS", "ADMIN_ADJUSTMENT": "UNLOGGED_ADMIN_ADJUSTMENTS",
                "PURCHASE": "UNLOGGED_PURCHASES", "SERVICE_OPERATION": "UNLOGGED_SERVICE_OPERATIONS",
                "WHEEL_PRIZE": "UNLOGGED_WHEEL_PRIZES"}
-# Rows that prove a Balance change happened but carry no amount (or no time).
-UNQUANTIFIED = ("REFERRAL_GIFT", "GIFT_CODE", "PAYMENT_UNKNOWN_METHOD")
+# Rows that prove a Balance change happened but carry no amount (or no time), and rows whose status is
+# outside the evidenced vocabulary (a 'refunded' payment or service operation may or may not have moved
+# Balance): all of them make PROVEN impossible.
+UNQUANTIFIED = ("REFERRAL_GIFT", "GIFT_CODE", "PAYMENT_UNKNOWN_METHOD", "PAYMENT_STATUS_UNKNOWN",
+                "SERVICE_OPERATION_STATUS_UNKNOWN")
 CAUSES = (*GROUP_CAUSE.values(), "UNLOGGED_MIXED_ACTIVITY", "ORDER_UNPROVEN", "UNIT_SUSPECT",
           "ACTIVITY_AFTER_HISTORY_INEXACT", "UNEXPLAINED")
 CERTAINTIES = ("PROVEN", "PROBABLE", "UNEXPLAINED")
@@ -558,6 +565,9 @@ CERTAINTIES = ("PROVEN", "PROBABLE", "UNEXPLAINED")
 # 2635, 5973, 6688). Gifts (price 0), admin renewals and transfers do not touch Balance.
 SERVICE_DEBIT_TYPES = ("extend_user", "extra_user", "extra_time_user", "extra_not_user", "extends_not_user",
                        "change_location")
+# service_other.status: NULL (writers that omit it) or 'paid' debits; 'unpaid' does not (MP index.php:1803,
+# 1873; function.php:1300); any other value (also '') is outside the evidenced vocabulary → uncertain.
+SERVICE_STATUS_NO_DEBIT = frozenset({"unpaid"})
 _PK_SAFE = re.compile(r"[0-9A-Za-z_-]{1,64}")
 
 DIFF_EXPLANATION = (
@@ -593,23 +603,52 @@ def _place(ev: tuple[int, int] | None, last: tuple[int, int] | None) -> str:
     return "IN_WINDOW"
 
 
+def _provably_after(s: str, r: str) -> bool:
+    """Row time ``s`` is certainly later than row time ``r`` (both non-NULL time keys). One format
+    is one column written by one clock, so same-kind keys compare directly; a local wall time
+    against an epoch only through the zone-free interval (no zone is guessed)."""
+    if s[0] == r[0]:
+        return s > r
+    return _interval(s)[0] > _interval(r)[1]
+
+
+def _order_evidence(conn, uid: str, verdict: str, snap: int, last_tkey: str | None) -> dict[str, Any]:
+    """Which rows could be the customer's FINAL row, and how many of them end at the snapshot.
+
+    * ``DIFFERS_FROM_SNAPSHOT`` (one time format): only the rows tied with the last timestamp
+      could be final (the id tie-break chose one of them);
+    * ``ORDER_UNPROVEN``: a row could be final unless another row is provably later; a row
+      without a time is always a candidate.
+
+    ``EVERY`` = every possible final row ends at the snapshot (the history ends there under every
+    admissible order); ``SOME`` = only some do (a coincidence is possible: e.g. snapshot 0 and an
+    early row that ended at 0); ``NONE`` = none does. A row that is provably not final never
+    counts, however its balance happens to compare."""
+    if verdict == "ORDER_UNPROVEN":
+        rows = conn.execute("SELECT tkey, after_v FROM m2n_wtx WHERE uid = ? ORDER BY rowno", (uid,)).fetchall()
+        latest: dict[str, str] = {}  # per kind: the greatest key (a later key of the same kind beats it)
+        for t, _a in rows:
+            if t is not None and (t[0] not in latest or t > latest[t[0]]):
+                latest[t[0]] = t
+        cands = [a for t, a in rows
+                 if t is None or not any(_provably_after(o, t) for o in latest.values())]
+    elif last_tkey is not None:
+        cands = [a for (a,) in conn.execute("SELECT after_v FROM m2n_wtx WHERE uid = ? AND tkey = ? ORDER BY rowno",
+                                            (uid, last_tkey))]
+    else:
+        cands = []
+    n_match = sum(1 for a in cands if a == str(snap))
+    match = "EVERY" if cands and n_match == len(cands) else "SOME" if n_match else "NONE"
+    return {"possible_final_rows": len(cands), "possible_final_rows_ending_at_snapshot": n_match, "match": match}
+
+
 def _difference_item(conn, uid: str, cust: dict[str, Any], verdict: str, snap: int, last_after: int | None,
                      delta: int | None, state: dict[str, Any]) -> dict[str, Any]:
     """What the analysis needs from one customer's history (read while the history is staged)."""
     tkey = state.get("last_tkey")
-    if verdict == "ORDER_UNPROVEN":
-        # Some row ends exactly at the snapshot → an order exists under which the history matches.
-        match = conn.execute("SELECT 1 FROM m2n_wtx WHERE uid = ? AND after_v = ? LIMIT 1",
-                             (uid, str(snap))).fetchone() is not None
-    else:
-        # Another row with the SAME (last) timestamp ends at the snapshot: only the id tie-break
-        # made the history differ.
-        match = tkey is not None and conn.execute(
-            "SELECT 1 FROM m2n_wtx WHERE uid = ? AND tkey = ? AND after_v = ? LIMIT 1",
-            (uid, tkey, str(snap))).fetchone() is not None
     return {"uid": uid, "cust": cust, "verdict": verdict, "snapshot": snap, "last_after": last_after,
             "delta": delta, "last_tkey": tkey, "last_id": state.get("last_id"), "transactions": state["n"],
-            "order_match": match}
+            "order": _order_evidence(conn, uid, verdict, snap, tkey)}
 
 
 def _pk(ctx: ModuleContext, table: str, pk: str | None) -> dict[str, Any]:
@@ -620,22 +659,25 @@ def _pk(ctx: ModuleContext, table: str, pk: str | None) -> dict[str, Any]:
 
 def _events(ctx: ModuleContext) -> tuple[dict[str, list[tuple]], dict[str, str]]:
     """uid → [(kind, table, pk, signed amount | None, time key | None)] for the customers in
-    ``m2n_wd_uid``; plus which evidence sources were usable."""
+    ``m2n_wd_uid``; plus the status of every evidence source (``USED`` per staged table, or
+    ``ABSENT`` / ``COLUMNS_MISSING``). Every staged table of a spec is read, not only the first."""
     conn = ctx.conn
     ev: dict[str, list[tuple]] = {}
     sources: dict[str, str] = {}
     slash = frozenset({FMT_PHP_SLASH, FMT_SQL_DATETIME, FMT_UNIX})
 
-    def table(spec: str, needed: set[str]):
-        st = next(iter(ctx.tables_for(spec)), None)
-        if st is None:
+    def tables(spec: str, needed: set[str]) -> list:
+        found = ctx.tables_for(spec)
+        if not found:
             sources[spec] = "ABSENT"
-            return None
-        if not needed <= set(st.stored_columns):
-            sources[spec] = "COLUMNS_MISSING"
-            return None
-        sources[spec] = "USED"
-        return st
+        usable = []
+        for st in found:
+            if needed <= set(st.stored_columns):
+                sources[st.name] = "USED"
+                usable.append(st)
+            else:
+                sources[st.name] = "COLUMNS_MISSING"
+        return usable
 
     def add(uid: str, item: tuple) -> None:
         ctx.tick()
@@ -644,11 +686,16 @@ def _events(ctx: ModuleContext) -> tuple[dict[str, list[tuple]], dict[str, str]]
     def tk(raw: str | None) -> str | None:
         return time_sort_key(parse_time(raw, slash))
 
-    st = table(PAYMENT_TABLE, {"id", "id_user", "price", "payment_Status", "Payment_Method", "time"})
-    if st:
-        for pid, uid, price, m_raw, t in conn.execute(
-                f"SELECT c_id, c_id_user, c_price, c_Payment_Method, c_time FROM {sql_ident(st.sql_name)} "  # noqa: S608
-                "WHERE c_payment_Status = 'paid' AND c_id_user IN (SELECT uid FROM m2n_wd_uid) ORDER BY rowno"):
+    for st in tables(PAYMENT_TABLE, {"id", "id_user", "price", "payment_Status", "Payment_Method", "time"}):
+        for pid, uid, price, m_raw, s_raw, t in conn.execute(
+                f"SELECT c_id, c_id_user, c_price, c_Payment_Method, c_payment_Status, c_time "  # noqa: S608
+                f"FROM {sql_ident(st.sql_name)} WHERE c_id_user IN (SELECT uid FROM m2n_wd_uid) ORDER BY rowno"):
+            if s_raw != "paid":
+                # Unpaid / waiting / reject / expire never credit Balance (payments.STATUS_VOCAB);
+                # an unknown status (e.g. 'refunded', NULL) might have: never silently dropped.
+                if s_raw not in STATUS_VOCAB:
+                    add(uid, ("PAYMENT_STATUS_UNKNOWN", st.name, pid, None, tk(t)))
+                continue
             method = METHOD_VOCAB[m_raw][0] if m_raw in METHOD_VOCAB else "UNKNOWN"
             amount = rules.parse_price(price)[0]
             if method == "UNKNOWN":
@@ -659,8 +706,7 @@ def _events(ctx: ModuleContext) -> tuple[dict[str, list[tuple]], dict[str, str]]
                 add(uid, ("ADMIN_ADJUSTMENT", st.name, pid, amount, tk(t)))
             else:
                 add(uid, ("TOPUP", st.name, pid, amount, tk(t)))
-    st = table("invoice", {"id_invoice", "id_user", "price_product", "time_sell"})
-    if st:
+    for st in tables("invoice", {"id_invoice", "id_user", "price_product", "time_sell"}):
         status = col_expr(st, "Status")
         for key, uid, price, ts in conn.execute(
                 f"SELECT c_id_invoice, c_id_user, c_price_product, c_time_sell FROM {sql_ident(st.sql_name)} "  # noqa: S608
@@ -672,20 +718,22 @@ def _events(ctx: ModuleContext) -> tuple[dict[str, list[tuple]], dict[str, str]]
             v, _note = rules.parse_time_sell(ts)
             add(uid, ("PURCHASE", st.name, key, None if amount is None else -amount,
                       None if v is None else f"U{v:012d}"))
-    st = table("service_other", {"id", "id_user", "price", "type", "time"})
-    if st:
+    for st in tables("service_other", {"id", "id_user", "price", "type", "time"}):
         marks = ",".join("?" * len(SERVICE_DEBIT_TYPES))
-        for sid, uid, price, t in conn.execute(
-                f"SELECT c_id, c_id_user, c_price, c_time FROM {sql_ident(st.sql_name)} "  # noqa: S608
-                f"WHERE c_id_user IN (SELECT uid FROM m2n_wd_uid) AND c_type IN ({marks}) "
-                f"AND ({col_expr(st, 'status')} IS NULL OR {col_expr(st, 'status')} = 'paid') ORDER BY rowno",
-                SERVICE_DEBIT_TYPES):
+        for sid, uid, price, s_raw, t in conn.execute(
+                f"SELECT c_id, c_id_user, c_price, {col_expr(st, 'status')}, c_time "  # noqa: S608
+                f"FROM {sql_ident(st.sql_name)} WHERE c_id_user IN (SELECT uid FROM m2n_wd_uid) "
+                f"AND c_type IN ({marks}) ORDER BY rowno", SERVICE_DEBIT_TYPES):
+            if s_raw in SERVICE_STATUS_NO_DEBIT:
+                continue
             amount = rules.parse_price(price)[0]
             if amount == 0:
                 continue
+            if s_raw is not None and s_raw != "paid":
+                add(uid, ("SERVICE_OPERATION_STATUS_UNKNOWN", st.name, sid, None, tk(t)))
+                continue
             add(uid, ("SERVICE_OPERATION", st.name, sid, None if amount is None else -amount, tk(t)))
-    st = table("wheel_list", {"id", "id_user", "price", "time"})
-    if st:
+    for st in tables("wheel_list", {"id", "id_user", "price", "time"}):
         for wid, uid, price, t in conn.execute(
                 f"SELECT c_id, c_id_user, c_price, c_time FROM {sql_ident(st.sql_name)} "  # noqa: S608
                 "WHERE c_id_user IN (SELECT uid FROM m2n_wd_uid) ORDER BY rowno"):
@@ -693,8 +741,7 @@ def _events(ctx: ModuleContext) -> tuple[dict[str, list[tuple]], dict[str, str]]
             if amount == 0:
                 continue  # a losing spin credits nothing (index.php:6266)
             add(uid, ("WHEEL_PRIZE", st.name, wid, amount, tk(t)))
-    st = table("reagent_report", {"id", "user_id", "reagent", "time"})
-    if st:
+    for st in tables("reagent_report", {"id", "user_id", "reagent", "time"}):
         for rid, a, b, t in conn.execute(
                 f"SELECT c_id, c_user_id, c_reagent, c_time FROM {sql_ident(st.sql_name)} "  # noqa: S608
                 "WHERE c_user_id IN (SELECT uid FROM m2n_wd_uid) OR c_reagent IN (SELECT uid FROM m2n_wd_uid) "
@@ -703,8 +750,7 @@ def _events(ctx: ModuleContext) -> tuple[dict[str, list[tuple]], dict[str, str]]
                 if conn.execute("SELECT 1 FROM m2n_wd_uid WHERE uid = ?", (uid,)).fetchone():
                     # join gift: amount = affiliates config at the time, not stored (index.php:5866-5872)
                     add(uid, ("REFERRAL_GIFT", st.name, rid, None, tk(t)))
-    st = table("Giftcodeconsumed", {"id", "id_user"})
-    if st:
+    for st in tables("Giftcodeconsumed", {"id", "id_user"}):
         for gid, uid in conn.execute(
                 f"SELECT c_id, c_id_user FROM {sql_ident(st.sql_name)} "  # noqa: S608
                 "WHERE c_id_user IN (SELECT uid FROM m2n_wd_uid) ORDER BY rowno"):
@@ -724,8 +770,11 @@ def _cashback_hint(delta: int | None, topups: dict[str, Any]) -> str | None:
     return f"{q // 100}.{q % 100:02d}"
 
 
-def _classify(item: dict[str, Any], events: list[tuple]) -> tuple[dict[str, Any], str, str, list[tuple], bool]:
-    """(features, cause, certainty, evidence rows, uses window events)."""
+def _classify(item: dict[str, Any], events: list[tuple], sources_complete: bool = True,
+              ) -> tuple[dict[str, Any], str, str, list[tuple], bool]:
+    """(features, cause, certainty, evidence rows, uses window events). ``sources_complete`` is
+    False when an evidence source was ABSENT or missed columns: events may then be invisible, so
+    an exact sum is at most PROBABLE."""
     last = _interval(item["last_tkey"])
     places = ("AFTER", "IN_WINDOW", "UNPLACEABLE")
     groups = {g: {p: _empty_bucket() for p in places} for g in GROUPS}
@@ -769,14 +818,17 @@ def _classify(item: dict[str, Any], events: list[tuple]) -> tuple[dict[str, Any]
             matches.append("ALL_AFTER_AND_WINDOW")
     window_used = False
     any_evidence = bool(refs)
+    order = item["order"]["match"]
     if item["verdict"] == "ORDER_UNPROVEN":
+        # Only rows that could be the final row count; a match anywhere else may be a coincidence
+        # (a snapshot of 0 equals some early balance_after almost always).
         cause = "ORDER_UNPROVEN"
-        certainty = "PROBABLE" if item["order_match"] else "UNEXPLAINED"
-    elif item["order_match"]:
+        certainty = {"EVERY": "PROVEN", "SOME": "PROBABLE"}.get(order, "UNEXPLAINED")
+    elif order != "NONE":  # a row tied with the last timestamp ends at the snapshot
         cause, certainty = "ORDER_UNPROVEN", "PROBABLE"
     elif after_groups and total_after == delta and not uncertain:
         cause = GROUP_CAUSE[after_groups[0]] if len(after_groups) == 1 else "UNLOGGED_MIXED_ACTIVITY"
-        certainty = "PROVEN"
+        certainty = "PROVEN" if sources_complete else "PROBABLE"
     elif matches:
         m = matches[0]
         g = m.split("_AFTER")[0]
@@ -809,8 +861,8 @@ def _classify(item: dict[str, Any], events: list[tuple]) -> tuple[dict[str, Any]
         "cashback_percent_hint": _cashback_hint(delta, groups["TOPUP"]["AFTER"]),
         "exact_matches": matches,
         "unit_hint": unit,
-        "order": {"verdict": item["verdict"], "a_row_with_the_last_time_or_any_order_matches_snapshot":
-                  item["order_match"]},
+        "order": {"verdict": item["verdict"], **item["order"]},
+        "evidence_sources_complete": sources_complete,
     }
     return features, cause, certainty, refs, window_used or any(r[0] == "IN_WINDOW" for r in refs)
 
@@ -822,6 +874,7 @@ def analyse_differences(ctx: ModuleContext, items: list[dict[str, Any]]) -> None
     conn.execute("CREATE TEMP TABLE m2n_wd_uid (uid TEXT PRIMARY KEY)")
     conn.executemany("INSERT OR IGNORE INTO m2n_wd_uid VALUES (?)", [(i["uid"],) for i in items])
     events, sources = _events(ctx) if items else ({}, {})
+    complete = all(v == "USED" for v in sources.values())
     conn.execute("DROP TABLE IF EXISTS m2n_wd_uid")
     sink = ctx.open("records/wallet_difference_analysis.jsonl") if items else None
     by_cause = dict.fromkeys(CAUSES, 0)
@@ -834,14 +887,14 @@ def analyse_differences(ctx: ModuleContext, items: list[dict[str, Any]]) -> None
     for item in sorted(items, key=lambda i: (i["cust"]["telegram_user_id"] is None, i["cust"]["telegram_user_id"] or "",
                                              i["uid"])):
         ctx.tick()
-        features, cause, certainty, refs, window = _classify(item, events.get(item["uid"], []))
-        if certainty == "PROVEN":
+        features, cause, certainty, refs, window = _classify(item, events.get(item["uid"], []), complete)
+        if cause == "ORDER_UNPROVEN" and certainty == "PROVEN":
+            action = "NONE"  # every row that could be the final one ends at the snapshot: no difference
+        elif certainty == "PROVEN":
             action = "ARCHIVE_ONLY"
             proven_abs[cause] = proven_abs.get(cause, 0) + abs(item["delta"])
-        elif cause == "ORDER_UNPROVEN" and certainty == "PROBABLE":
-            action = "NONE"  # an order of the same-time rows ends at the snapshot
         else:
-            action = "OWNER_DECISION"
+            action = "OWNER_DECISION"  # never NONE for a match that could be a coincidence
         by_cause[cause] += 1
         by_cert[certainty] += 1
         by_pair[f"{cause}/{certainty}"] = by_pair.get(f"{cause}/{certainty}", 0) + 1
@@ -877,6 +930,10 @@ def analyse_differences(ctx: ModuleContext, items: list[dict[str, Any]]) -> None
         decisions.append("WALLET_DIFF_UNEXPLAINED_REVIEW")
     if any(n for k, n in by_pair.items() if k.endswith("/PROBABLE") and not k.startswith("ORDER_UNPROVEN")):
         decisions.append("WALLET_DIFF_PROBABLE_CONFIRM")
+    if by_pair.get("ORDER_UNPROVEN/PROBABLE"):
+        decisions.append("WALLET_DIFF_ORDER_CONFIRM")
+    if items and not complete:
+        decisions.append("WALLET_DIFF_EVIDENCE_SOURCES_INCOMPLETE")
     if by_cause["UNIT_SUSPECT"]:
         decisions.append("WALLET_DIFF_UNIT_SUSPECT_CONFIRM_UNIT")
     if window_customers:
@@ -895,14 +952,17 @@ def analyse_differences(ctx: ModuleContext, items: list[dict[str, Any]]) -> None
         "owner_decisions": decisions,
         "customers_with_events_in_time_window": window_customers,
         "evidence_sources": dict(sorted(sources.items())),
+        "evidence_sources_complete": complete if items else None,
         "time_comparison": {"local_time_offset_bounds_hours": [OFFSET_MIN_S // 3600, OFFSET_MAX_S // 3600],
                             "rule": "AFTER iff earliest possible instant of the event > latest possible instant of "
                                     "the last history row; local wall times span every UTC offset (zone unproven)"},
         "certainty_rules": {
             "PROVEN": "delta == signed sum of all quantified events AFTER the last history row; nothing in the "
-                      "window, unplaceable, unquantified or unreadable",
-            "PROBABLE": "an exact sum that needs window events or ignores another group, a 10x unit pattern, a tied "
-                        "last timestamp, or activity after the history that does not add up",
+                      "window, unplaceable, unquantified, of an unknown status or unreadable; every evidence "
+                      "source USED. ORDER_UNPROVEN: every row that could be the final one ends at the snapshot",
+            "PROBABLE": "an exact sum that needs window events, ignores another group or misses an evidence "
+                        "source, a 10x unit pattern, only some possible final rows ending at the snapshot, or "
+                        "activity after the history that does not add up",
             "UNEXPLAINED": "no observable evidence"},
         "opening_balance_changed": False,
         "history_reapplied": False,

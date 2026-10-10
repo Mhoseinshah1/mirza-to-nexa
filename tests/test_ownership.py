@@ -302,7 +302,7 @@ def test_default_backup_scenarios(default):
     want = {
         "no_transfer": ("CONFIRMED_CURRENT_OWNER", []),
         "a_to_b": ("CONFIRMED_TRANSFER", []),
-        "a_to_b_to_c": ("CONFIRMED_TRANSFER", []),
+        "round_trip_chain": ("CONFIRMED_TRANSFER", []),
         "old_invoice_new_owner": ("AMBIGUOUS_OWNER", ["OWNERSHIP_TRANSFER_NOT_APPLIED_TO_INVOICE"]),
         "action_outside_window": ("AMBIGUOUS_OWNER", ["OWNERSHIP_ACTION_OUTSIDE_HOLDING_WINDOW"]),
         "actor_not_in_user_table": ("AMBIGUOUS_OWNER", ["OWNERSHIP_ACTOR_NOT_IN_USER_TABLE"]),
@@ -331,3 +331,82 @@ def test_module_registered_after_services_ext():
 
     order = [m.key for m in modules_in_order()]
     assert order.index("services_ext") < order.index("ownership")
+
+
+# ---- OWN-R4 binds the current owner too (holding windows of the invoice owner) -------------------
+
+WIN_INVOICES = [
+    ("8200001abcd", B, "win_pre", "active"),   # B acts before receiving it from A
+    ("8200002abcd", A, "win_aba", "active"),   # A→B→A, A acts in its first and in its last window
+    ("8200003abcd", B, "win_post", "active"),  # B acts (and asks to cancel) after receiving it
+    ("8200004abcd", A, "win_gap", "active"),   # A→B→A, A acts while B holds it
+]
+WIN_SO = [
+    (100, B, "win_pre", "{}", "extend_user"),
+    (101, A, "win_pre", B, "transfertouser"),
+    (200, A, "win_aba", "{}", "extend_user"),
+    (201, A, "win_aba", B, "transfertouser"),
+    (202, B, "win_aba", A, "transfertouser"),
+    (203, A, "win_aba", "{}", "extra_user"),
+    (300, A, "win_post", B, "transfertouser"),
+    (301, B, "win_post", "{}", "extra_user"),
+    (400, A, "win_gap", B, "transfertouser"),
+    (401, A, "win_gap", "{}", "extra_user"),
+    (402, B, "win_gap", A, "transfertouser"),
+]
+WIN_CX = [(1, B, "win_post", "reject")]
+
+
+@pytest.fixture(scope="module")
+def windows(tmp_path_factory):
+    tmp = tmp_path_factory.mktemp("own_win")
+    q = sx.sql_str
+    inv = ",".join(f"({q(k)},{q(o)},{q(u)},'x','1700000000','p','1000','10','30',{q(s)},'syn-a','p001','0','0','',"
+                   "NULL,NULL)" for k, o, u, s in WIN_INVOICES)
+    so = ",".join(f"({i},{q(a)},{q(u)},{q(v)},'2025/06/01 10:00:{i % 60:02d}','0',{q(t)},NULL,NULL)"
+                  for i, a, u, v, t in WIN_SO)
+    cx = ",".join(f"({i},{q(a)},{q(u)},'0',{q(s)})" for i, a, u, s in WIN_CX)
+    buf = io.StringIO()
+    write_dump(buf, SynthSpec(users=40, modules=False, invoices_per_user=1.0))
+    buf.write(f"INSERT INTO `invoice` VALUES {inv};\n"
+              + "DROP TABLE IF EXISTS `service_other`;\n" + sx.DDL["service_other"]
+              + f"INSERT INTO `service_other` VALUES {so};\n"
+              + "DROP TABLE IF EXISTS `cancel_service`;\n" + sx.DDL["cancel_service"]
+              + f"INSERT INTO `cancel_service` VALUES {cx};\n")
+    path = tmp / "win.zip"
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("backup.sql", buf.getvalue().encode("utf-8"))
+    return run(tmp, path, ws_name="w")
+
+
+def test_current_owner_acting_before_receiving_is_not_proven(windows):
+    r = by_invoice(windows)["8200001abcd"]
+    assert r["ownership_decision"] == "AMBIGUOUS_OWNER"
+    assert r["reason_codes"] == ["OWNERSHIP_ACTION_OUTSIDE_HOLDING_WINDOW"]
+    assert r["ownership_confidence"] != "PROVEN" and r["final_owner_telegram_user_id"] is None
+    assert r["original_owner"] is None and r["needs_manual_review"] is True
+    ev = {e["pk"]: (e["telegram_user_id"], e["relation"], e["reason"]) for e in r["ownership_evidence"]
+          if e["source_table"] == "service_other"}
+    assert ev["100"] == (B, "CONFLICT", "OWNERSHIP_ACTION_OUTSIDE_HOLDING_WINDOW")
+    rv = [x for x in review(windows) if x["kind"] == "service_ownership" and x["source_ref"]["pk"] == "8200001abcd"]
+    assert [x["code"] for x in rv] == ["OWNERSHIP_ACTION_OUTSIDE_HOLDING_WINDOW"]
+
+
+def test_current_owner_windows_include_earlier_holding(windows):
+    got = by_invoice(windows)
+    aba = got["8200002abcd"]
+    assert (aba["ownership_decision"], aba["reason_codes"]) == ("CONFIRMED_TRANSFER", [])
+    assert aba["final_owner_telegram_user_id"] == A and aba["ownership_confidence"] == "PROVEN"
+    rel = {e["pk"]: e["relation"] for e in aba["ownership_evidence"] if e["source_table"] == "service_other"}
+    assert rel["200"] == rel["203"] == "MATCHES_INVOICE"
+    gap = got["8200004abcd"]   # A acting while B held it is outside every window of A
+    assert (gap["ownership_decision"], gap["reason_codes"]) == ("AMBIGUOUS_OWNER",
+                                                                ["OWNERSHIP_ACTION_OUTSIDE_HOLDING_WINDOW"])
+    assert gap["final_owner_telegram_user_id"] is None
+
+
+def test_current_owner_acting_after_receiving_is_confirmed(windows):
+    r = by_invoice(windows)["8200003abcd"]
+    assert (r["ownership_decision"], r["reason_codes"]) == ("CONFIRMED_TRANSFER", [])
+    assert r["final_owner_telegram_user_id"] == B and r["original_owner"]["telegram_user_id"] == A
+    assert all(e["reason"] is None for e in r["ownership_evidence"])

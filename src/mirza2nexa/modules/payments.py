@@ -686,6 +686,23 @@ def _unit_values(ctx: ModuleContext) -> dict[str, list[int]]:
     return other
 
 
+# Distributions whose values are single customers' own amounts (a balance, a wallet movement, a
+# payment): report.json is not encrypted, so no exact value of these may appear in it. They get no
+# min/max, their quantiles are rounded to 2 significant digits and are withheld below
+# PER_CUSTOMER_MIN_VALUES values. Price lists (product/invoice/service prices) stay exact.
+PER_CUSTOMER_SOURCES = frozenset({"payment_customer_paid", "payment_admin_adjustment", "user_balance_nonzero_abs",
+                                  "wallet_transaction_amount_abs"})
+PER_CUSTOMER_MIN_VALUES = 20
+
+
+def round_sig2(v: int) -> int:
+    """Round a positive integer to 2 significant digits, half up (exact integer arithmetic)."""
+    if v < 100:
+        return v
+    step = 10 ** (len(str(v)) - 2)
+    return (v + step // 2) // step * step
+
+
 def _quantile(conn, src: str, n: int, q: float) -> int | None:
     if n == 0:
         return None
@@ -714,11 +731,19 @@ def money_unit_evidence(ctx: ModuleContext) -> dict[str, Any]:
         m10, m100, m1000 = conn.execute(
             "SELECT COALESCE(SUM(v % 10 = 0),0), COALESCE(SUM(v % 100 = 0),0), COALESCE(SUM(v % 1000 = 0),0) "
             "FROM m2n_unit WHERE src = ?", (src,)).fetchone()
-        q = {name: _quantile(conn, src, n, f) for name, f in (("min", 0.0), ("p10", 0.1), ("p50", 0.5),
-                                                               ("p90", 0.9), ("max", 1.0))}
-        medians[src] = q["p50"]
+        if src in PER_CUSTOMER_SOURCES:
+            shown = n >= PER_CUSTOMER_MIN_VALUES
+            q = {name: round_sig2(_quantile(conn, src, n, f)) if shown else None
+                 for name, f in (("p10", 0.1), ("p50", 0.5), ("p90", 0.9))}
+            privacy = {"per_customer_values": True, "quantiles": "ROUNDED_2_SIGNIFICANT_DIGITS" if shown else
+                       f"WITHHELD_FEWER_THAN_{PER_CUSTOMER_MIN_VALUES}_VALUES", "min_max": "NOT_REPORTED"}
+        else:
+            q = {name: _quantile(conn, src, n, f) for name, f in (("min", 0.0), ("p10", 0.1), ("p50", 0.5),
+                                                                   ("p90", 0.9), ("max", 1.0))}
+            privacy = {}
+        medians[src] = q["p50"]  # rounded for per-customer sources: median_ratio leaks nothing more
         dist[src] = {"positive_values": n, "zero_values": other[src][0], "unparsed_values": other[src][1],
-                     **{k: None if v is None else str(v) for k, v in q.items()},
+                     **{k: None if v is None else str(v) for k, v in q.items()}, **privacy,
                      "share_multiple_of_10": _ratio(m10, n), "share_multiple_of_100": _ratio(m100, n),
                      "share_multiple_of_1000": _ratio(m1000, n)}
 

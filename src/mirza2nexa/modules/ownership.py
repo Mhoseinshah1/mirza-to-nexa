@@ -42,8 +42,10 @@ RULES: dict[str, str] = {
               f"db/tables/service_other.php:5) whose links connect (value[i] == id_user[i+1]), with no self "
               f"transfer ({MP} index.php:2876) and whose last target equals invoice.id_user proves the current "
               f"owner; its first sender is the original owner",
-    "OWN-R4": "an owner-claim row of a previous holder is explained only if its service_other.id lies inside "
-              "that holder's holding window of the proven chain (cancel_service has no time: holder membership)",
+    "OWN-R4": "when a transfer chain exists, an owner-claim row of any holder (previous holders and the current "
+              "owner alike) is explained only if its service_other.id lies inside one of that holder's holding "
+              "windows of the proven chain; the current owner's windows are the final one plus any earlier one "
+              "(A→B→A) (cancel_service has no time: holder membership)",
     "OWN-R5": f"extend_user_by_admin.id_user is the acting admin ({MP} admin.php:7646) or the owner "
               f"({MP} api/invoice.php:308): never an owner claim",
     "OWN-R6": f"extends_not_user.id_user is whoever paid a renewal looked up by panel username, with no invoice "
@@ -79,7 +81,8 @@ REASONS: dict[str, str] = {
     "OWNERSHIP_TRANSFER_CHAIN_BROKEN": "زنجیرهٔ انتقال‌ها پیوسته نیست (گیرندهٔ یک انتقال فرستندهٔ انتقال بعدی نیست).",
     "OWNERSHIP_TRANSFER_NOT_APPLIED_TO_INVOICE": "آخرین گیرندهٔ انتقال با مالک فاکتور یکی نیست؛ انتقال در فاکتور "
                                                  "اعمال نشده یا انتقال ثبت‌نشده‌ای رخ داده است.",
-    "OWNERSHIP_ACTION_OUTSIDE_HOLDING_WINDOW": "مالک قبلی خارج از بازهٔ مالکیت خود (مثلاً پس از انتقال سرویس) روی آن عملیات ثبت کرده است.",
+    "OWNERSHIP_ACTION_OUTSIDE_HOLDING_WINDOW": "یکی از دارندگان سرویس خارج از بازهٔ مالکیت خود (مثلاً پیش از دریافت یا پس از "
+                                               "انتقال سرویس) روی آن عملیات ثبت کرده است.",
     "OWNERSHIP_ACTOR_NOT_IN_USER_TABLE": "ردیفی از کاربری که در جدول کاربران نیست به این سرویس اشاره می‌کند "
                                          "(ممکن است انتقال کل حساب توسط ادمین باشد که ثبت نمی‌شود).",
     "OWNERSHIP_OWNER_MISMATCH_NO_TRANSFER_RECORD": "کاربر دیگری روی این سرویس عملیات ثبت کرده و هیچ انتقال ثبت‌شده‌ای "
@@ -325,17 +328,21 @@ class OwnershipModel:
             out.append((t.target, float(t.seq), end))
         return out
 
+    def _in_holding_window(self, r: _Ref, transfers: list[_Ref]) -> tuple[bool, str | None]:
+        """OWN-R4 for a holder of a proven chain: does the row lie inside one of the actor's holding windows?"""
+        if r.spec == "cancel_service":
+            return True, None                                       # untimed: holder membership (OWN-R8)
+        if r.seq is None or r.table != transfers[0].table:
+            return False, "OWNERSHIP_TRANSFER_ORDER_UNPROVEN"
+        if any(h == r.actor and lo < r.seq < hi for h, lo, hi in self._windows(transfers)):
+            return True, None
+        return False, "OWNERSHIP_ACTION_OUTSIDE_HOLDING_WINDOW"
+
     def _explain_previous(self, r: _Ref, transfers: list[_Ref], chain_reason: str | None) -> tuple[bool, str | None]:
         """Is an owner-claim row of a non-current holder explained by the chain (OWN-R4)?"""
         senders = {t.actor for t in transfers}
         if transfers and chain_reason is None and r.actor in senders:
-            if r.spec == "cancel_service":
-                return True, None                                   # untimed: holder membership (OWN-R8)
-            if r.seq is None or r.table != transfers[0].table:
-                return False, "OWNERSHIP_TRANSFER_ORDER_UNPROVEN"
-            if any(h == r.actor and lo < r.seq < hi for h, lo, hi in self._windows(transfers)):
-                return True, None
-            return False, "OWNERSHIP_ACTION_OUTSIDE_HOLDING_WINDOW"
+            return self._in_holding_window(r, transfers)
         if transfers and chain_reason is not None and (r.actor in senders or r.actor in {t.target for t in transfers}):
             return False, chain_reason
         if self.customer(r.actor) is None:
@@ -380,7 +387,12 @@ class OwnershipModel:
                 continue
             if r.actor == owner:
                 rel, why = "MATCHES_INVOICE", None
-                corroborated = corroborated or r.role == "OWNER_CLAIM"
+                if r.role == "OWNER_CLAIM" and transfers and chain_reason is None:
+                    # OWN-R4 also binds the current owner: acting outside every window it held (e.g. before
+                    # receiving the service) is unexplained, possibly an unlogged account move (OWN-R7).
+                    ok, why = self._in_holding_window(r, transfers)
+                    rel = "MATCHES_INVOICE" if ok else "CONFLICT"
+                corroborated = corroborated or (r.role == "OWNER_CLAIM" and why is None)
             elif r.role == "PAYER":
                 rel, why = "PAYER_NOT_OWNER", None
                 info.add("OWNERSHIP_PAYER_NOT_OWNER")
@@ -390,7 +402,9 @@ class OwnershipModel:
                 ok, why = self._explain_previous(r, transfers, chain_reason)
                 rel = "PREVIOUS_OWNER_VIA_TRANSFER" if ok else "CONFLICT"
             if n_invs == 1:
-                self.ref_rel[key] = (rel, why)
+                # services_ext asks the model only for rows whose actor differs from the invoice owner; an
+                # owner's row outside its window is reported on this service's record and review row instead.
+                self.ref_rel[key] = ("MATCHES_INVOICE", None) if r.actor == owner else (rel, why)
             if why:
                 reasons.add(why)
                 ref_reasons[why] = ref_reasons.get(why, 0) + 1
@@ -661,16 +675,19 @@ def synth_tables(out, state: SynthState) -> None:
     op(a[0], state.invoice_usernames[i], TRANSFER_TYPE, value=o)
     cancel(a[0], state.invoice_usernames[i])      # same service in another table, by the previous owner
     sc["a_to_b"] = state.invoice_keys[i]
-    i = 4   # A→B→C with prior extend / extra-volume operations by each holder
+    i = 4   # O→A→B→O with operations by each holder inside its window. The services_ext generator may
+    #         already have written rows by the invoice owner O with lower ids; a round trip keeps them inside
+    #         O's first holding window (OWN-R4 also binds the current owner).
     o = state.invoice_owners[i]
     a = others(o, 2)
+    op(o, state.invoice_usernames[i], TRANSFER_TYPE, value=a[0])
     op(a[0], state.invoice_usernames[i], "extend_user", price="30000", status="paid")
     op(a[0], state.invoice_usernames[i], "extra_user", price="5000")
     op(a[0], state.invoice_usernames[i], TRANSFER_TYPE, value=a[1])
     op(a[1], state.invoice_usernames[i], "extra_time_user", price="5000")
     op(a[1], state.invoice_usernames[i], TRANSFER_TYPE, value=o)
     op(o, state.invoice_usernames[i], "extend_user", price="30000", status="paid")
-    sc["a_to_b_to_c"] = state.invoice_keys[i]
+    sc["round_trip_chain"] = state.invoice_keys[i]
     i = 5   # old invoice keeps the sender, a transfer names a new owner who then operates
     o = state.invoice_owners[i]
     a = others(o, 3)

@@ -323,7 +323,20 @@ For each `DIFFERS_FROM_SNAPSHOT` customer and each `ORDER_UNPROVEN` customer:
   * per group and placement: count, signed sum, unreadable amounts.
 * `exact_matches`: which sums equal `delta` (`<GROUP>_AFTER`, `<GROUP>_AFTER_AND_WINDOW`, `ALL_AFTER`, `ALL_AFTER_AND_WINDOW`).
 * `unit_hint`: `snapshot == 10 × history` or `history == 10 × snapshot` (a flag, never a conversion).
-* `order`: whether another row with the **same** last timestamp (or, for `ORDER_UNPROVEN`, any row) ends at the snapshot.
+* `order`: `possible_final_rows`, `possible_final_rows_ending_at_snapshot` and `match`
+  (`EVERY` / `SOME` / `NONE`). Only a row that **could be the final row** counts: for
+  `DIFFERS_FROM_SNAPSHOT` (one time format) the rows tied with the last timestamp; for
+  `ORDER_UNPROVEN` every row that no other row is provably later than (same format: later key;
+  local vs epoch: earliest instant after the other's latest, §5.2 window) — a row without a time is
+  always a candidate. A row that is provably not final never counts: an early row that happened to
+  end at the snapshot (snapshot `0` matches almost every customer who ever spent everything) is a
+  coincidence, not an order match.
+* Every payment / `service_other` debit row whose status is outside the evidenced vocabulary
+  (e.g. `refunded`, NULL payment status, `''`) is kept as an unquantified event
+  (`PAYMENT_STATUS_UNKNOWN`, `SERVICE_OPERATION_STATUS_UNKNOWN`). Known non-crediting statuses
+  (`Unpaid`, `waiting`, `reject`, `expire`; `service_other` `unpaid`) are ignored.
+* `evidence_sources_complete`: every evidence source table was read (`USED`). Every staged table
+  that resolves to a source is read, not only the first.
 * `cashback_percent_hint`: `(delta − later top-ups) / later top-ups × 100`, for comparison with the `PaySetting` cashback values.
 
 ### 5.3 Categories and certainty rules
@@ -332,9 +345,12 @@ Evaluated in this order; the first rule that holds wins.
 
 | Cause | Certainty | Rule | Proposed action |
 |---|---|---|---|
-| `ORDER_UNPROVEN` | PROBABLE / UNEXPLAINED | verdict `ORDER_UNPROVEN`: PROBABLE if some row ends at the snapshot; or a tied last timestamp whose other row ends at the snapshot | `NONE` if PROBABLE, else `OWNER_DECISION` |
-| `UNLOGGED_TOPUPS`, `UNLOGGED_PURCHASES`, `UNLOGGED_SERVICE_OPERATIONS`, `UNLOGGED_ADMIN_ADJUSTMENTS`, `UNLOGGED_WHEEL_PRIZES` | **PROVEN** | `delta` = signed sum of all `AFTER` events, all in one group, and **nothing uncertain**: no `IN_WINDOW`/`UNPLACEABLE` event, no unreadable amount, no referral/gift/unknown-method row | `ARCHIVE_ONLY` |
+| `ORDER_UNPROVEN` | **PROVEN** | verdict `ORDER_UNPROVEN` and `order.match = EVERY`: the history ends at the snapshot under every admissible order (no difference) | `NONE` |
+| `ORDER_UNPROVEN` | PROBABLE | `order.match = SOME` (verdict `ORDER_UNPROVEN`, or a tied last timestamp whose other row ends at the snapshot) | `OWNER_DECISION` |
+| `ORDER_UNPROVEN` | UNEXPLAINED | verdict `ORDER_UNPROVEN` and `order.match = NONE` (a match by a row that cannot be final is ignored) | `OWNER_DECISION` |
+| `UNLOGGED_TOPUPS`, `UNLOGGED_PURCHASES`, `UNLOGGED_SERVICE_OPERATIONS`, `UNLOGGED_ADMIN_ADJUSTMENTS`, `UNLOGGED_WHEEL_PRIZES` | **PROVEN** | `delta` = signed sum of all `AFTER` events, all in one group, **nothing uncertain** (no `IN_WINDOW`/`UNPLACEABLE` event, no unreadable amount, no referral/gift/unknown-method/unknown-status row) and **every evidence source `USED`** | `ARCHIVE_ONLY` |
 | `UNLOGGED_MIXED_ACTIVITY` | **PROVEN** | as above with ≥ 2 groups | `ARCHIVE_ONLY` |
+| the same cause | PROBABLE | the exact identity above holds but an evidence source is `ABSENT`/`COLUMNS_MISSING` (events may be invisible) | `OWNER_DECISION` |
 | the matching group's cause (or MIXED) | PROBABLE | an exact match that needs window events, ignores another group's events, or coexists with uncertain evidence | `OWNER_DECISION` |
 | `UNIT_SUSPECT` | PROBABLE | no arithmetic match and a 10× relation (flag only) | `OWNER_DECISION` |
 | `ACTIVITY_AFTER_HISTORY_INEXACT` | PROBABLE | evidence after/around the history that does not add up (cashback, refunds, direct-pay clamping, partial logging) | `OWNER_DECISION` |
@@ -353,8 +369,13 @@ replaced by a keyed `pk_ref`; at most 50 per record), all live-state flags `fals
 Reconciliation `report.reconciliation.wallet_differences` (always present; `status NO_DIFFERENCES`
 when nothing differs or the table is absent): `total`, `from_verdict`, `by_cause`, `by_certainty`
 (`PROVEN`/`PROBABLE`/`UNEXPLAINED`), `by_cause_and_certainty`, `proposed_actions`,
-`proven_abs_delta_by_cause_minor` (Σ|delta| for PROVEN only), `owner_decisions`,
-`evidence_sources`, `time_comparison`, `certainty_rules`.
+`proven_abs_delta_by_cause_minor` (Σ|delta| for PROVEN only; an `ORDER_UNPROVEN` PROVEN record has
+no delta), `owner_decisions`, `evidence_sources` (per staged table name: `USED` / `COLUMNS_MISSING`;
+per source name `ABSENT` when no table resolves to it), `evidence_sources_complete`,
+`time_comparison`, `certainty_rules`.
+
+`proposed_action: NONE` is only ever given when nothing can be a coincidence (`ORDER_UNPROVEN` /
+PROVEN); every PROBABLE or UNEXPLAINED record is `OWNER_DECISION`.
 
 ### 5.4 Owner decisions (codes in `owner_decisions`)
 
@@ -362,6 +383,8 @@ when nothing differs or the table is absent): `total`, `from_verdict`, `by_cause
 |---|---|---|
 | `WALLET_DIFF_UNEXPLAINED_REVIEW` | any UNEXPLAINED | accept the snapshot as the opening figure for these customers (default) or investigate with the old bot's Telegram report channel (paths 7-14 leave only Telegram messages) |
 | `WALLET_DIFF_PROBABLE_CONFIRM` | any PROBABLE other than an order tie | confirm the probable mechanism, e.g. cashback percentages, refunds |
+| `WALLET_DIFF_ORDER_CONFIRM` | any `ORDER_UNPROVEN` / PROBABLE | which of the possible final rows is really the last one (only some of them end at the snapshot) |
+| `WALLET_DIFF_EVIDENCE_SOURCES_INCOMPLETE` | a difference exists and an evidence source is `ABSENT` / `COLUMNS_MISSING` | accept that some causes are unobservable, or supply a backup that contains the table/columns |
 | `WALLET_DIFF_UNIT_SUSPECT_CONFIRM_UNIT` | any `UNIT_SUSPECT` | whether these histories were written in Rial (see `money_unit_evidence`) |
 | `WALLET_DIFF_PROVE_TIME_ZONES` | an event fell in the 26 h window | prove the zones of `wallet_transaction.created_at`, `Payment_report.time` and the server, so the window can be narrowed |
 
@@ -369,7 +392,13 @@ when nothing differs or the table is absent): `total`, `from_verdict`, `by_cause
 
 Statistics only; `decision: OWNER`. Distributions (positive values, zero, unparsed, min/p10/p50/p90/max,
 shares that are multiples of 10/100/1000) for paid customer payments, admin adjustments, product
-prices, invoice prices, `service_other` prices, non-zero balances and wallet amounts; cross checks
+prices, invoice prices, `service_other` prices, non-zero balances and wallet amounts.
+`report.json` is not encrypted, so the **per-customer** distributions (`payment_customer_paid`,
+`payment_admin_adjustment`, `user_balance_nonzero_abs`, `wallet_transaction_amount_abs`) carry no
+`min`/`max` (`min_max: NOT_REPORTED`), their p10/p50/p90 are rounded half up to 2 significant
+digits (`quantiles: ROUNDED_2_SIGNIFICANT_DIGITS`) and are `null` below 20 values
+(`WITHHELD_FEWER_THAN_20_VALUES`); counts and multiple-of shares stay exact. A `median_ratio`
+involving such a source uses the rounded (or withheld → `null`) median. Price lists stay exact. Cross checks
 (`payment_customer_paid_vs_product_price`, `invoice_price_vs_product_price`, …) counting values equal
 to a reference value, to 10× one and to 1/10 of one, and the median ratio. The code evidence for Toman
 is listed in the section. Read: same scale ⇒ many exact equalities and median ratio of order 1; mixed
@@ -385,8 +414,9 @@ values, redacted and truncated).
 2. In `report.json`: `reconciliation.wallet_history.customers.differs_from_snapshot` must equal the
    `WALLET_HISTORY_DIFFERS_FROM_SNAPSHOT` warning count (baseline 24), and
    `reconciliation.wallet_differences.from_verdict.DIFFERS_FROM_SNAPSHOT` must equal it too.
-3. Check `wallet_differences.evidence_sources`: `Payment_report`, `invoice`, `service_other` and
-   `wheel_list` should be `USED`; an `ABSENT`/`COLUMNS_MISSING` source makes some causes unobservable.
+3. Check `wallet_differences.evidence_sources`: `Payment_report`, `invoice`, `service_other`,
+   `wheel_list`, `reagent_report` and `Giftcodeconsumed` should be `USED`; an `ABSENT`/`COLUMNS_MISSING`
+   source makes some causes unobservable, so no difference is PROVEN (`evidence_sources_complete: false`).
 4. Read `by_cause_and_certainty`. For each PROVEN record, re-add its `evidence_refs` by hand
    (`SELECT price FROM Payment_report WHERE id IN (…)`, `SELECT price_product FROM invoice WHERE
    id_invoice IN (…)`) and confirm the sum equals `features.delta_snapshot_minus_history_minor`.
