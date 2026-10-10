@@ -19,12 +19,13 @@ import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .catalogue import CATALOGUE, EXCLUDED
 from .errors import SchemaUnknown
 from .mapping import rules
 from .progress import CancelToken, ProgressFn
 from .sqldump import DumpReader, RowEvent, TableDef, TableEvent, WarningEvent
 
-FINGERPRINT_VERSION = "mirza2nexa-source-fingerprint:v1"
+FINGERPRINT_VERSION = "mirza2nexa-source-fingerprint:v2"
 _BATCH = 2000
 _MASK = (1 << 256) - 1
 
@@ -44,6 +45,12 @@ class TableStats:
     missing_required: tuple[str, ...] = ()
     never_read_present: tuple[str, ...] = ()
     digest: int = 0  # order-independent multiset hash of stored rows
+    spec_name: str | None = None  # catalogue spec this table resolved to
+    klass: str | None = None  # migration class from the catalogue
+    sql_name: str | None = None  # staging table name ("src_user", "t3", …) when rows are stored
+    primary_key: tuple[str, ...] = ()
+    dropped_columns: tuple[str, ...] = ()  # secret columns, never stored
+    unmapped_columns: tuple[str, ...] = ()  # undeclared columns of a column-listed spec, not stored
 
 
 @dataclass
@@ -93,17 +100,35 @@ class Staging:
             if existing.columns != cols:
                 raise SchemaUnknown("ساختار یک جدول در طول فایل SQL تغییر کرده است؛ پردازش متوقف شد.",
                                     code="schema.inconsistent", detail=f"table {t.name}")
+            if t.primary_key and not existing.primary_key:  # phpMyAdmin: ALTER TABLE … ADD PRIMARY KEY
+                existing.primary_key = tuple(t.primary_key)
             return
-        stats = TableStats(name=t.name, columns=cols, column_types=types)
-        if t.name in rules.SOURCE_TABLES:  # case-sensitive, like legacy-inventory.ts:52-55
+        stats = TableStats(name=t.name, columns=cols, column_types=types, primary_key=tuple(t.primary_key))
+        spec = CATALOGUE.lookup(t.name)
+        if spec is not None:
+            stats.spec_name, stats.klass = spec.name, spec.klass
+            if not stats.primary_key and spec.primary_key and all(c in cols for c in spec.primary_key):
+                stats.primary_key = spec.primary_key
+        if spec is not None and t.name not in rules.SOURCE_TABLES:
+            stats.classified = True
+            stored, dropped, unmapped = spec.storable_columns(cols)
+            stats.stored_columns, stats.dropped_columns, stats.unmapped_columns = stored, dropped, unmapped
+            if stored and spec.klass != EXCLUDED:
+                stats.sql_name = f"t{len(self._pending)}"
+                coldefs = ", ".join(f"{_q('c_' + c)} TEXT" for c in stored)
+                self.conn.execute(f"CREATE TABLE {_q(stats.sql_name)} (rowno INTEGER PRIMARY KEY, {coldefs})")
+                self._pending[t.name] = []
+        elif t.name in rules.SOURCE_TABLES:  # case-sensitive, like legacy-inventory.ts:52-55
             stats.classified = True
             stats.missing_required = tuple(c for c in rules.REQUIRED_COLUMNS[t.name] if c not in cols)
             stats.never_read_present = tuple(c for c in cols if c in rules.NEVER_READ[t.name])
             wanted = rules.REQUIRED_COLUMNS[t.name] + rules.OPTIONAL_COLUMNS[t.name]
             stats.stored_columns = tuple(c for c in wanted if c in cols)
+            stats.dropped_columns = stats.never_read_present
             if not stats.missing_required:
+                stats.sql_name = "src_" + t.name
                 coldefs = ", ".join(f"{_q('c_' + c)} TEXT" for c in stats.stored_columns)
-                self.conn.execute(f"CREATE TABLE {_q('src_' + t.name)} (rowno INTEGER PRIMARY KEY, {coldefs})")
+                self.conn.execute(f"CREATE TABLE {_q(stats.sql_name)} (rowno INTEGER PRIMARY KEY, {coldefs})")
                 self._pending[t.name] = []
         self.tables[t.name] = stats
 
@@ -160,7 +185,7 @@ class Staging:
         stats = self.tables[table]
         placeholders = ", ".join("?" for _ in range(len(stats.stored_columns) + 1))
         self.conn.execute("BEGIN")
-        self.conn.executemany(f"INSERT INTO {_q('src_' + table)} VALUES ({placeholders})", rows)  # noqa: S608 - table is one of rules.SOURCE_TABLES (fixed whitelist), values are bound parameters
+        self.conn.executemany(f"INSERT INTO {_q(stats.sql_name)} VALUES ({placeholders})", rows)  # noqa: S608 - staging-generated table name, values are bound parameters
         self.conn.execute("COMMIT")
         rows.clear()
 
@@ -171,8 +196,12 @@ class Staging:
         for t in list(self._pending):
             self._flush(t)
         for t in self._pending:
-            pk = rules.PRIMARY_KEYS[t]
-            self.conn.execute(f"CREATE INDEX {_q('ix_' + t + '_pk')} ON {_q('src_' + t)} ({_q('c_' + pk)})")
+            stats = self.tables[t]
+            pk = rules.PRIMARY_KEYS.get(t) if t in rules.SOURCE_TABLES else (
+                stats.primary_key[0] if stats.primary_key and stats.primary_key[0] in stats.stored_columns else None)
+            if pk:
+                self.conn.execute(
+                    f"CREATE INDEX {_q('ix_' + stats.sql_name + '_pk')} ON {_q(stats.sql_name)} ({_q('c_' + pk)})")
             if t == "invoice":
                 self.conn.execute(f"CREATE INDEX ix_invoice_user ON src_invoice ({_q('c_id_user')})")
 
@@ -305,7 +334,7 @@ def source_fingerprint(tables: dict[str, TableStats], profile: SchemaProfile) ->
         "tables": {
             t: {"rows": tables[t].rows, "columns": list(tables[t].stored_columns),
                 "digest": f"{tables[t].digest:064x}"}
-            for t in rules.SOURCE_TABLES if t in tables
+            for t in sorted(tables) if tables[t].sql_name
         },
     }
     return hashlib.sha256(rules.js_json(body).encode()).hexdigest()

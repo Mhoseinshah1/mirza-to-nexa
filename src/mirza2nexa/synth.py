@@ -12,7 +12,8 @@ from __future__ import annotations
 import io
 import random
 import zipfile
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 TG_BASE = 7_000_000_000
@@ -79,20 +80,6 @@ CREATE TABLE `product` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 """
 
-DDL_EXTRA = """DROP TABLE IF EXISTS `setting`;
-CREATE TABLE `setting` (
-  `Bot_Status` varchar(200) DEFAULT NULL,
-  `help_Status` varchar(200) DEFAULT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-INSERT INTO `setting` VALUES ('on','on');
-DROP TABLE IF EXISTS `Payment_report`;
-CREATE TABLE `Payment_report` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `id_user` varchar(200) DEFAULT NULL,
-  `price` varchar(200) DEFAULT NULL,
-  PRIMARY KEY (`id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-"""
 
 
 def _sql_str(v: str | None) -> str:
@@ -112,6 +99,50 @@ class SynthSpec:
     anomalies: bool = True
     # change balances of the first N users (for backup-to-backup diff tests)
     balance_shift_users: int = 0
+    # emit the tables of every registered domain module (payments, wallet history, …)
+    modules: bool = True
+    # rows per domain table relative to users (domain modules interpret it)
+    module_scale: float = 1.0
+
+
+@dataclass
+class SynthState:
+    """What the core generator produced, for domain modules to build consistent tables on."""
+
+    spec: SynthSpec
+    user_ids: list[str] = field(default_factory=list)
+    balances: list[int] = field(default_factory=list)
+    invoice_keys: list[str] = field(default_factory=list)
+    invoice_owners: list[str] = field(default_factory=list)
+    invoice_usernames: list[str] = field(default_factory=list)
+    product_codes: list[str] = field(default_factory=list)
+    exp: dict = field(default_factory=dict)
+
+    def rng(self, name: str) -> random.Random:
+        return random.Random(f"{self.spec.seed}:{name}")  # noqa: S311 - synthetic data
+
+    def write_rows(self, out, table: str, rows: list[str]) -> None:
+        for i in range(0, len(rows), self.spec.rows_per_insert):
+            out.write(f"INSERT INTO `{table}` VALUES " + ",".join(rows[i:i + self.spec.rows_per_insert]) + ";\n")  # noqa: S608
+
+
+SynthHook = Callable[[object, SynthState], None]
+_SYNTH_HOOKS: list[tuple[int, str, SynthHook]] = []
+
+
+def register_synth(name: str, hook: SynthHook, order: int = 100) -> None:
+    """Domain modules add their synthetic tables here (see ``mirza2nexa.modules.*``)."""
+    if any(n == name for _, n, _ in _SYNTH_HOOKS):
+        return
+    _SYNTH_HOOKS.append((order, name, hook))
+    _SYNTH_HOOKS.sort()
+
+
+
+
+def sql_str(v: str | None) -> str:
+    """SQL string literal for synthetic dumps (public helper for domain synth hooks)."""
+    return _sql_str(v)
 
 
 def write_dump(out, spec: SynthSpec) -> dict[str, int]:
@@ -121,6 +152,7 @@ def write_dump(out, spec: SynthSpec) -> dict[str, int]:
     exp = {"users": 0, "positive_sum": 0, "negative_sum": 0, "positive": 0, "negative": 0, "zero": 0,
            "invoices": 0, "products": spec.products}
 
+    state = SynthState(spec=spec, exp=exp, product_codes=[f"p{i:03d}" for i in range(1, spec.products + 1)])
     out.write(DDL_PRODUCT)
     rows = []
     for i in range(1, spec.products + 1):
@@ -149,6 +181,8 @@ def write_dump(out, spec: SynthSpec) -> dict[str, int]:
         if n < spec.balance_shift_users:
             bal += 1000
         exp["users"] += 1
+        state.user_ids.append(tg)
+        state.balances.append(bal)
         if bal > 0:
             exp["positive"] += 1
             exp["positive_sum"] += bal
@@ -190,6 +224,9 @@ def write_dump(out, spec: SynthSpec) -> dict[str, int]:
             f"{_sql_str('0')},{_sql_str('')},{_sql_str('{\"subscription_url\":\"https://never.read/x\"}')},"
             f"{_sql_str('00000000-0000-0000-0000-000000000000')})")
         exp["invoices"] += 1
+        state.invoice_keys.append(key)
+        state.invoice_owners.append(owner)
+        state.invoice_usernames.append(f"syn{k}")
         if len(buf) >= spec.rows_per_insert:
             flush("invoice")
     flush("invoice")
@@ -208,7 +245,11 @@ def write_dump(out, spec: SynthSpec) -> dict[str, int]:
         )
         exp["invoices"] += 5
     out.write("UNLOCK TABLES;\n")
-    out.write(DDL_EXTRA)
+    if spec.modules:
+        from . import modules  # noqa: F401 - registers domain synth hooks
+
+        for _order, _name, hook in list(_SYNTH_HOOKS):
+            hook(out, state)
     out.write("-- Dump completed on 2026-10-01 10:00:00\n")
     return exp
 

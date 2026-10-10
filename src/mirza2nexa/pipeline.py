@@ -249,16 +249,18 @@ def _convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
         "counts": outcome.counts,
         "reconciliation": outcome.reconciliation,
         "resellers": outcome.resellers,
-        "blockers": [{"code": k, "message": BLOCKER_MESSAGES.get(k, k), "count": v}
+        "blockers": [{"code": k, "message": outcome.blocker_messages.get(k, BLOCKER_MESSAGES.get(k, k)), "count": v}
                      for k, v in sorted(outcome.blockers.items())],
-        "warnings": [{"code": k, "message": WARNING_MESSAGES.get(k, k), "count": v}
+        "warnings": [{"code": k, "message": outcome.warning_messages.get(k, WARNING_MESSAGES.get(k, k)), "count": v}
                      for k, v in sorted(outcome.warnings.items())],
+        "coverage": outcome.coverage,
         "review_count": outcome.review_count,
         "mapping": outcome.mapping,
         "diff": diff,
         "elapsed_seconds": None,
     }
     writer.write_json("reports/reconciliation.json", outcome.reconciliation)
+    writer.write_json("reports/coverage.json", {"tables": outcome.coverage})
     writer.write_json("reports/mapping.json", {"mapping_version": MAPPING_VERSION, "entities": outcome.mapping,
                                                 "schema_profile": profile.to_dict()})
     if diff is not None:

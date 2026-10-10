@@ -74,7 +74,6 @@ BLOCKER_MESSAGES: dict[str, str] = {
 }
 
 WARNING_MESSAGES: dict[str, str] = {
-    "UNCLASSIFIED_TABLES": "جدول‌هایی در بکاپ هست که قرارداد NEXA برای آن‌ها وجود ندارد؛ منتقل نشدند و فقط شمارش شدند.",
     "RESELLERS_AS_CUSTOMERS": "نمایندگان (agent) طبق تصمیم NEXA فقط به‌صورت مشتری عادی منتقل می‌شوند؛ نقش و اعتبار نمایندگی منتقل نمی‌شود.",
     "SECRET_COLUMNS_DROPPED": "ستون‌های حاوی اطلاعات حساس پنل/توکن (مثل user_info، uuid، bottype، inbounds) خوانده و منتقل نشدند.",
     "SERVICES_NEED_PANEL_MAPPING": "سرویس‌ها فقط کاندید پذیرش هستند؛ نگاشت پنل و تطبیق وضعیت واقعی در مرحله Adoption سمت NEXA انجام می‌شود.",
@@ -111,6 +110,9 @@ class ConversionOutcome:
     review_count: int = 0
     mapping: list[dict[str, Any]] = field(default_factory=list)
     resellers: dict[str, Any] = field(default_factory=dict)
+    coverage: list[dict[str, Any]] = field(default_factory=list)
+    blocker_messages: dict[str, str] = field(default_factory=dict)
+    warning_messages: dict[str, str] = field(default_factory=dict)
 
     def block(self, code: str, n: int = 1) -> None:
         self.blockers[code] = self.blockers.get(code, 0) + n
@@ -139,6 +141,12 @@ class Converter:
         self.cancel = cancel or CancelToken()
         self.progress = progress
         self.out = ConversionOutcome()
+        self.messages = dict(MESSAGES)
+        self.blocker_messages = self.out.blocker_messages
+        self.blocker_messages.update(BLOCKER_MESSAGES)
+        self.warning_messages = self.out.warning_messages
+        self.warning_messages.update(WARNING_MESSAGES)
+        self._coverage: dict[str, dict[str, Any]] = {}
         self.review = open_jsonl("review-queue.jsonl")
         total = sum(tables[t].rows for t in rules.SOURCE_TABLES if t in tables)
         self._total = max(total * 2, 1)  # each staged row is visited about twice
@@ -161,7 +169,7 @@ class Converter:
     def _review(self, *, kind: str, code: str, entity: str, table: str, pk: str | None,
                 severity: str = "blocker", data: dict[str, Any] | None = None) -> None:
         self.review.write({
-            "kind": kind, "severity": severity, "code": code, "message": MESSAGES.get(code, code),
+            "kind": kind, "severity": severity, "code": code, "message": self.messages.get(code, code),
             "entity": entity, "source_ref": {"table": table, "pk": pk}, "data": data or {},
         })
         self.out.review_count += 1
@@ -199,8 +207,10 @@ class Converter:
                 self._invoices()
                 self._services()
                 self._panels()
+            self._run_modules()
             self._schema_findings()
             self._mapping_table()
+            self._finish_coverage()
             return self.out
         finally:
             self.conn.close()
@@ -712,13 +722,78 @@ class Converter:
         self._count("panels", "source", len(agg))
         self._count("panels", "converted", len(agg))
 
+    # ---- domain modules & coverage ----------------------------------------------------
+    def coverage_for(self, table: str) -> dict[str, Any]:
+        return self._coverage.setdefault(table, {})
+
+    def _run_modules(self) -> None:
+        from .modules import ModuleContext, modules_in_order
+
+        ctx = ModuleContext(self)
+        for module in modules_in_order():
+            self.cancel.check()
+            module.run(ctx)
+
+    def _finish_coverage(self) -> None:
+        """One coverage row per table in the dump. Nothing is silently ignored."""
+        from .catalogue import CATALOGUE, CLASS_FA, EXCLUDED
+
+        counts = self.out.counts
+        core = {
+            "user": {"exported": counts.get("customers", {}).get("converted", 0),
+                     "review": counts.get("customers", {}).get("review", 0)},
+            "invoice": {"archived": counts.get("invoices", {}).get("converted", 0),
+                        "review": counts.get("invoices", {}).get("review", 0)},
+            "product": {"exported": counts.get("products", {}).get("converted", 0),
+                        "review": counts.get("products", {}).get("review", 0)},
+        }
+        unclassified = 0
+        for name in sorted(self.tables):
+            t = self.tables[name]
+            spec = CATALOGUE.lookup(name)
+            cov = {"table": name, "rows": t.rows, "columns": len(t.columns),
+                   "stored_columns": list(t.stored_columns), "dropped_secret_columns": list(t.dropped_columns),
+                   "unmapped_columns": list(t.unmapped_columns), "exported": 0, "archived": 0, "review": 0,
+                   "skipped": 0, "redacted_cells": 0}
+            if spec is not None:
+                cov.update({"class": spec.klass, "class_fa": CLASS_FA[spec.klass], "module": spec.module,
+                            "purpose_fa": spec.purpose_fa, "nexa_target": spec.nexa_target, "reason": spec.reason,
+                            "sensitivity": spec.sensitivity, "evidence": list(spec.evidence),
+                            "open_questions": list(spec.open_questions)})
+            else:
+                cov.update({"class": None, "class_fa": "طبقه‌بندی‌نشده", "module": None,
+                            "reason": "No catalogue entry: meaning unknown, nothing migrated."})
+            cov.update(core.get(name, {}) if name in core and t.sql_name else {})
+            cov.update(self._coverage.get(name, {}))
+            if t.rows == 0:
+                cov["status"] = "empty"
+            elif spec is None:
+                cov["status"] = "blocked"
+                unclassified += 1
+            elif spec.klass == EXCLUDED:
+                cov["status"] = "excluded"
+                cov["skipped"] = t.rows
+            elif name in core and not t.sql_name:
+                cov["status"] = "blocked"
+            elif name in core:
+                cov.setdefault("status", "executed")
+            elif "status" not in cov:
+                cov["status"] = "blocked"
+                cov.setdefault("reason_blocked", "no converter produced records for this table")
+            accounted = cov["exported"] + cov["archived"] + cov["review"] + cov["skipped"]
+            cov["accounted_rows"] = accounted
+            self.out.coverage.append(cov)
+        if unclassified:
+            self.out.block("UNCLASSIFIED_TABLE", unclassified)
+            self.blocker_messages.setdefault(
+                "UNCLASSIFIED_TABLE",
+                "جدول غیرخالی بدون طبقه‌بندی در بکاپ وجود دارد؛ تا مستندسازی تصمیم آن، بسته مسدود است.")
+
     # ---- schema-level findings & mapping table -----------------------------------------
     def _schema_findings(self) -> None:
         p = self.profile
         for code in sorted(set(p.entity_blocked.values())):
             self.out.block(code)
-        if p.unknown_tables:
-            self.out.warn("UNCLASSIFIED_TABLES", len(p.unknown_tables))
         if any(t.never_read_present for t in self.tables.values()):
             self.out.warn("SECRET_COLUMNS_DROPPED")
 
