@@ -11,7 +11,14 @@ counts and primary keys only.
 ``records/support/tickets.jsonl``          ``legacy_ticket`` (``ticket``)
 ``records/support/ticket_messages.jsonl``  ``legacy_ticket_message`` (``ticket_message``), ordered per ticket
 
-Every record: ``applies_to_live_state: false``, ``notifies_customer: false``, ``creates_ticket: false``.
+Every record: ``applies_to_live_state: false``, ``notifies_customer: false``, ``creates_ticket: false``,
+``sends_message: false`` and ``nexa_view: LEGACY_READ_ONLY_THREAD_UNDER_CUSTOMER_SUPPORT`` (proposal).
+
+State (reconciliation ``support_state``): fork tickets are classed OPEN / ANSWERED / CLOSED / UNKNOWN by a
+literal reading of their status token (``status_basis: STATUS_TOKEN_UNPROVEN`` — no public DDL or writer);
+``support_message`` threads take their last message's proven state (Unseen/Customerresponse → OPEN,
+Answered → ANSWERED, else UNKNOWN). Open items become ONE aggregate owner-decision review each
+(``TICKET_OPEN_OWNER_DECISION``, ``SUPPORT_THREAD_OPEN_OWNER_DECISION``); nothing is created or sent.
 
 Evidence:
 
@@ -39,6 +46,7 @@ import hashlib
 from typing import Any
 
 from ..catalogue import ARCHIVE, CATALOGUE, CONFIGURATION, PERSONAL, PUBLIC, REVIEW, ColumnSpec, TableSpec
+from ..mapping import rules
 from ..synth import SynthState, register_synth, sql_str
 from .agents import (
     MIRZA_PRO,
@@ -46,6 +54,7 @@ from .agents import (
     NO_DDL,
     OWNER_COLUMNS,
     TIME_COLUMNS,
+    ReviewBudget,
     RowKeys,
     account_unstaged,
     customer_ref,
@@ -59,7 +68,22 @@ from .agents import (
 from .base import Module, ModuleContext, register_module
 
 FLAGS_OFF = {"applies_to_live_state": False, "notifies_customer": False, "creates_ticket": False,
-             "affects_wallet": False}
+             "sends_message": False, "affects_wallet": False}
+#: Where a legacy conversation belongs in NEXA (proposal; needs an approved NEXA importer).
+NEXA_VIEW = "LEGACY_READ_ONLY_THREAD_UNDER_CUSTOMER_SUPPORT"
+STATUS_COLUMNS = ("status", "state", "ticket_status")
+# Fork ticket status tokens → class. The fork has NO public DDL/writer, so this is a literal reading of
+# the token only (``status_basis: STATUS_TOKEN_UNPROVEN``); anything else is UNKNOWN with the raw value.
+FORK_STATUS = {
+    "open": "OPEN", "opened": "OPEN", "new": "OPEN", "pending": "OPEN", "waiting": "OPEN", "unseen": "OPEN",
+    "customerresponse": "OPEN", "answered": "ANSWERED", "replied": "ANSWERED",
+    "closed": "CLOSED", "close": "CLOSED", "resolved": "CLOSED", "done": "CLOSED",
+}
+# support_message: a message is OPEN while no admin answer was written (Unseen, index.php:3224) or the
+# customer wrote again (Customerresponse, index.php:3290); ANSWERED after admin.php reply (index.php:3264).
+# Pending/close have no public writer → UNKNOWN. A thread's state is its last message's state.
+SUPPORT_CLASS = {"Unseen": "OPEN", "Customerresponse": "OPEN", "Answered": "ANSWERED"}
+TICKET_STATES = ("OPEN", "ANSWERED", "CLOSED", "UNKNOWN")
 TICKET_COLUMNS = ("ticket_id", "id_ticket", "ticketid", "ticket")
 
 CATALOGUE.register(TableSpec(
@@ -119,9 +143,12 @@ def _time_key(iso: str | None, pk: str | None) -> tuple:
 def _write_ordered(sink, group: list[tuple[tuple, dict[str, Any]]], thread: str | None) -> int:
     """Write one thread's messages in (time, id) order with a 1-based ``seq``; empties ``group``."""
     group.sort(key=lambda item: item[0])
+    last_state = group[-1][1].get("message_state") if group else None
     for seq, (_k, rec) in enumerate(group, start=1):
         if thread is not None:
             rec["thread_ref"] = thread
+            rec["thread_state"] = last_state
+            rec["thread_state_basis"] = "LAST_MESSAGE_STATUS"
         rec["seq"] = seq
         rec["thread_size"] = len(group)
         sink.write(rec)
@@ -151,7 +178,7 @@ def _departments(ctx: ModuleContext, out: dict[str, Any]) -> None:
         out["departments"] += n
 
 
-def _support_messages(ctx: ModuleContext, out: dict[str, Any]) -> None:
+def _support_messages(ctx: ModuleContext, out: dict[str, Any], budget: ReviewBudget) -> None:
     tables = ctx.tables_for("support_message")
     if not tables:
         return
@@ -167,6 +194,8 @@ def _support_messages(ctx: ModuleContext, out: dict[str, Any]) -> None:
             nonlocal n
             if not group:
                 return
+            last = max(group, key=lambda item: item[0])[1]["message_state"]
+            s["threads_by_state"][last] = s["threads_by_state"].get(last, 0) + 1
             uid, dep = current or (None, None)
             thread = "legacy:support:thread:" + hashlib.sha256(
                 f"{uid}\x00{dep}".encode("utf-8", "surrogatepass")).hexdigest()[:24]
@@ -193,6 +222,7 @@ def _support_messages(ctx: ModuleContext, out: dict[str, Any]) -> None:
                 "customer_text": ctx.redact(row.get("text"), stats.name),
                 "admin_answer": ctx.redact(row.get("result"), stats.name),
                 "status_raw": status_raw, "nexa_status_proposal": proposal,
+                "message_state": SUPPORT_CLASS.get(status_raw or "", "UNKNOWN"), "nexa_view": NEXA_VIEW,
                 "sent_at": iso, "sent_at_raw": row.get("time"), "sent_at_note": note,
                 "thread_basis": "INFERRED_SAME_CUSTOMER_AND_DEPARTMENT", "order_basis": "TIME_THEN_ID",
                 "text_class": "PERSONAL_REDACTED", **FLAGS_OFF,
@@ -205,8 +235,8 @@ def _support_messages(ctx: ModuleContext, out: dict[str, Any]) -> None:
                 s["time_unreadable"] += 1
             if not owner["valid"]:
                 s["owner_unknown"] += 1
-                ctx.review(kind="support", code="TICKET_OWNER_UNKNOWN", entity="support", table=stats.name, pk=pk,
-                           severity="warning", data={"decision": owner["decision"]},
+                budget.add(kind="support", code="TICKET_OWNER_UNKNOWN", table=stats.name, pk=pk,
+                           reason="OWNER_NOT_IMPORTED_CUSTOMER", data={"decision": owner["decision"]},
                            message="صاحب پیام/تیکت پشتیبانی مشتری معتبری نیست؛ فقط آرشیو شد.")
             if proposal == "UNKNOWN":
                 s["status_unknown"] += 1
@@ -217,11 +247,12 @@ def _support_messages(ctx: ModuleContext, out: dict[str, Any]) -> None:
     s["by_status"] = dict(sorted(s["by_status"].items()))
     if s["status_unknown"]:
         ctx.review(kind="support", code="SUPPORT_STATUS_UNKNOWN", entity="support", table="support_message",
-                   pk=None, severity="warning", data={"messages": s["status_unknown"]},
+                   pk=None, severity="warning",
+                   data={"messages": s["status_unknown"], "reason": "STATUS_WITHOUT_PUBLIC_WRITER"},
                    message="وضعیت برخی پیام‌ها نوشتار شناخته‌شده‌ای ندارد؛ مقدار خام حفظ شد (UNKNOWN).")
 
 
-def _tickets(ctx: ModuleContext, out: dict[str, Any]) -> set[str]:
+def _tickets(ctx: ModuleContext, out: dict[str, Any], budget: ReviewBudget) -> set[str]:
     """Archive ``ticket`` rows. Returns the set of raw ticket primary keys (for message linking)."""
     ids: set[str] = set()
     tables = ctx.tables_for("ticket")
@@ -232,16 +263,26 @@ def _tickets(ctx: ModuleContext, out: dict[str, Any]) -> set[str]:
     spec = ctx.spec("ticket")
     for stats in tables:
         owner_col = pick_column(stats, OWNER_COLUMNS)
+        status_col = pick_column(stats, STATUS_COLUMNS)
+        t["status_column"] = status_col
         keys = RowKeys(ctx, stats, "support")
         n = 0
         for _rowno, row in ctx.rows(stats):
             ctx.tick()
             key, pk, checksum = keys(row)
             owner = customer_ref(ctx, row.get(owner_col)) if owner_col else None
+            status_raw = row.get(status_col) if status_col else None
+            status = FORK_STATUS.get(rules.js_trim(status_raw or "").lower(), "UNKNOWN")
+            t["by_status"][status] += 1
+            if status == "OPEN":
+                t["open_pks"].append(pk)
             rec = _rec("legacy_ticket", "m2n.support.ticket.v1", key, stats.name, pk)
             rec.update({"customer": owner, "owner_column": owner_col,
                         "owner_relation_basis": "COLUMN_NAME_CONVENTION_UNPROVEN" if owner_col else "UNKNOWN",
-                        "status": "UNKNOWN", "fields_raw": raw_fields(ctx, stats.name, row),
+                        "status": status, "status_raw": status_raw, "status_column": status_col,
+                        "status_basis": "STATUS_TOKEN_UNPROVEN" if status_col else "NO_STATUS_COLUMN",
+                        "owner_decision": "OPEN_TICKET_OWNER_DECISION" if status == "OPEN" else None,
+                        "nexa_view": NEXA_VIEW, "fields_raw": raw_fields(ctx, stats.name, row),
                         "text_class": "PERSONAL_REDACTED", **FLAGS_OFF,
                         "provenance": ctx.provenance(stats.name, pk, checksum)})
             sink.write(rec)
@@ -250,8 +291,8 @@ def _tickets(ctx: ModuleContext, out: dict[str, Any]) -> set[str]:
                 ids.add(pk)
             if owner is None or not owner["valid"]:
                 t["owner_unknown"] += 1
-                ctx.review(kind="support", code="TICKET_OWNER_UNKNOWN", entity="support", table=stats.name, pk=pk,
-                           severity="warning",
+                budget.add(kind="support", code="TICKET_OWNER_UNKNOWN", table=stats.name, pk=pk,
+                           reason="OWNER_NOT_IMPORTED_CUSTOMER" if owner else "NO_OWNER_COLUMN",
                            data={"decision": owner["decision"] if owner else "NO_OWNER_COLUMN"},
                            message="صاحب پیام/تیکت پشتیبانی مشتری معتبری نیست؛ فقط آرشیو شد.")
         keys.finish("support")
@@ -262,7 +303,7 @@ def _tickets(ctx: ModuleContext, out: dict[str, Any]) -> set[str]:
     return ids
 
 
-def _ticket_messages(ctx: ModuleContext, ticket_ids: set[str], out: dict[str, Any]) -> None:
+def _ticket_messages(ctx: ModuleContext, ticket_ids: set[str], out: dict[str, Any], budget: ReviewBudget) -> None:
     tables = ctx.tables_for("ticket_message")
     if not tables:
         return
@@ -293,13 +334,14 @@ def _ticket_messages(ctx: ModuleContext, ticket_ids: set[str], out: dict[str, An
                         "sent_at": iso, "sent_at_note": note, "time_column": time_col,
                         "order_basis": "TIME_THEN_ID" if time_col else "ID",
                         "fields_raw": raw_fields(ctx, stats.name, row), "text_class": "PERSONAL_REDACTED",
+                        "nexa_view": NEXA_VIEW,
                         **FLAGS_OFF, "provenance": ctx.provenance(stats.name, pk, checksum)})
             group.append((_time_key(iso, pk), rec))
             m["messages"] += 1
             if not linked:
                 m["orphans"] += 1
-                ctx.review(kind="support", code="TICKET_MESSAGE_ORPHAN", entity="support", table=stats.name, pk=pk,
-                           severity="warning", data={"ticket_column": tcol},
+                budget.add(kind="support", code="TICKET_MESSAGE_ORPHAN", table=stats.name, pk=pk,
+                           reason="TICKET_NOT_IN_BACKUP" if tcol else "NO_TICKET_COLUMN", data={"ticket_column": tcol},
                            message="پیام تیکت به تیکت موجودی متصل نیست؛ فقط آرشیو شد.")
         n += _write_ordered(sink, group, None)
         keys.finish("support")
@@ -309,25 +351,57 @@ def _ticket_messages(ctx: ModuleContext, ticket_ids: set[str], out: dict[str, An
 
 
 def run(ctx: ModuleContext) -> None:
+    budget = ReviewBudget(ctx, "support")
     out: dict[str, Any] = {
         "departments": 0,
         "support_message": {"messages": 0, "threads": 0, "owner_unknown": 0, "status_unknown": 0,
-                            "time_unreadable": 0, "by_status": {}},
-        "ticket": {"tickets": 0, "owner_unknown": 0},
+                            "time_unreadable": 0, "by_status": {}, "threads_by_state": {}},
+        "ticket": {"tickets": 0, "owner_unknown": 0, "status_column": None,
+                   "by_status": {k: 0 for k in TICKET_STATES}, "open_pks": []},
         "ticket_message": {"messages": 0, "orphans": 0},
     }
     _departments(ctx, out)
-    _support_messages(ctx, out)
-    ids = _tickets(ctx, out)
-    _ticket_messages(ctx, ids, out)
+    _support_messages(ctx, out, budget)
+    ids = _tickets(ctx, out, budget)
+    _ticket_messages(ctx, ids, out, budget)
     account_unstaged(ctx, SUPPORT_TABLES, "support")
+    t, sm = out["ticket"], out["support_message"]
+    open_pks = t.pop("open_pks")
+    sm["threads_by_state"] = dict(sorted(sm["threads_by_state"].items()))
+    if open_pks:
+        ctx.review(kind="support", code="TICKET_OPEN_OWNER_DECISION", entity="support", table="ticket", pk=None,
+                   severity="warning",
+                   data={"tickets": len(open_pks), "sample_pks": open_pks[:20],
+                         "reason": "OPEN_LEGACY_TICKET_NOT_RECREATED"},
+                   message="تیکت‌های باز میرزا در NEXA ساخته نمی‌شوند و به کسی پیام داده نمی‌شود؛ مالک باید پیش از "
+                           "قطع میرزا آن‌ها را ببندد یا دستی پیگیری کند.")
+    open_threads = sm["threads_by_state"].get("OPEN", 0)
+    if open_threads:
+        ctx.review(kind="support", code="SUPPORT_THREAD_OPEN_OWNER_DECISION", entity="support",
+                   table="support_message", pk=None, severity="warning",
+                   data={"threads": open_threads, "reason": "UNANSWERED_LEGACY_THREAD_NOT_RECREATED"},
+                   message="گفت‌وگوهای پشتیبانی بی‌پاسخ میرزا در NEXA ساخته نمی‌شوند؛ پیگیری با تصمیم مالک.")
+    budget.flush()
     out["text_in_reports"] = False
     out["decision"] = "archive only inside the encrypted package; no ticket is created and nobody is notified"
     ctx.reconciliation("support", out)
+    ctx.reconciliation("support_state", {
+        "tickets": t["tickets"], "open_tickets": t["by_status"]["OPEN"],
+        "tickets_by_status": t["by_status"],
+        "ticket_status_basis": "STATUS_TOKEN_UNPROVEN" if t["status_column"] else "NO_STATUS_COLUMN",
+        "ticket_messages": out["ticket_message"]["messages"], "ticket_message_orphans": out["ticket_message"]["orphans"],
+        "support_messages": sm["messages"], "support_threads": sm["threads"],
+        "support_threads_by_state": sm["threads_by_state"], "support_threads_open": open_threads,
+        "support_status_basis": "PROVEN_WRITERS index.php:3224,3264,3290; Pending/close UNKNOWN",
+        "nexa_view": NEXA_VIEW, "imported_into_nexa_tickets": False,
+        "creates_ticket_true": 0, "sends_message_true": 0, "notifies_customer_true": 0,
+        "decision": "read-only legacy history; open items are an owner decision, never re-opened in NEXA",
+    })
     ctx.mapping({"entity": "support_history", "source_table": "support_message / ticket / ticket_message / departman",
                  "source_columns": ["iduser", "text(redacted)", "result(redacted)", "status", "time"],
                  "target": "records/support/*.jsonl (archive)", "status": "archived",
-                 "note": "statuses with a proven writer get a NEXA proposal; Pending/close stay UNKNOWN"})
+                 "note": "statuses with a proven writer get a NEXA proposal; Pending/close stay UNKNOWN; "
+                         "fork ticket status read as a literal token (UNPROVEN)"})
 
 
 register_module(Module(key="support", title_fa="پشتیبانی (آرشیو)", run=run, order=420))
@@ -383,6 +457,8 @@ def _synth(out, state: SynthState) -> None:
         f"(1,{s(U(40))},{s('مشکل اتصال 🔌')},{s('open')},{s('2024/08/01 10:00:00')})",
         f"(2,{s('5000000900')},{s('بدون صاحب')},{s('closed')},{s('2024/08/02 10:00:00')})",
         f"(3,NULL,{s('ticket with null owner')},{s('open')},{s('1700000000')})",
+        f"(4,{s(U(41))},{s('پاسخ داده شد')},{s('Answered')},{s('2024/08/04 10:00:00')})",
+        f"(5,{s(U(42))},{s('وضعیت عجیب')},{s('7')},{s('2024/08/05 10:00:00')})",
     ])
     out.write("DROP TABLE IF EXISTS `ticket_message`;\nCREATE TABLE `ticket_message` (\n  `id` int NOT NULL,\n"
               "  `ticket_id` varchar(20) DEFAULT NULL,\n  `sender` varchar(20) DEFAULT NULL,\n  `message` text,\n"

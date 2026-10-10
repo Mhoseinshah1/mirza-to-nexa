@@ -41,7 +41,33 @@ Money-like values in agent tables are kept as **raw text only**.
 | `agent_logs.jsonl` | `legacy_agent_log` | `agent_log` row | `owner`, `fields_raw` (free text redacted) |
 | `agent_usage.jsonl` | `legacy_agent_usage` | `agent_usage_snapshot` row | `owner`, `fields_raw` |
 | `tier_prices.jsonl` | `legacy_agent_price_level` | `custom_service_tier_prices` row; **levels are never collapsed** | `owner_value_raw`, `level_index` (1..k in PK order), `levels_for_owner` (k), `fields_raw`, `price_semantics: UNKNOWN`, `applies_price: false` |
+| `state.jsonl` | `legacy_agent_state` | profile owner | see below |
 | `agent_requests.jsonl` | `legacy_agent_request` | `Requestagent` and `requestagent` row (separate tables, separate schemas `…v1.mirza` / `…v1.fork`) | `requester`, `status` (`WAITING`/`ACCEPTED`/`REJECTED`/`UNKNOWN`), `granted_tier`, `requested_at` (+ raw, note), `description` (redacted; personal) |
+
+### Per-agent state summary (`state.jsonl`, reconciliation `agents_state`)
+
+One `legacy_agent_state` record per profile owner (`idempotency_key` `legacy:agents:state:<user.id>`). It is a
+**summary for the owner's decision**, never an instruction: `role_active: false`, `credit_granted: false`,
+`applies_price: false`, `applies_limits: false`, plus the four flags above.
+
+| Field | Content | Evidence / basis |
+|---|---|---|
+| `history` | row counts per table owned by this agent (`agent_manage`, `agent_invoice`, `agent_log`, `agent_usage_snapshot`, `custom_service_tier_prices`, `agent_requests`) + `total`; `archive_only: true` | fork relations `COLUMN_NAME_CONVENTION_UNPROVEN`; `Requestagent.id` proven (`index.php:6119`) |
+| `role_proposal` | `RESELLER_CANDIDATE` (tier `n`/`n2` **and** imported customer) or `NONE`; `proposed_nexa_tier_id: null`; `role_active: false`; `decision: OWNER_DECISION_REQUIRED` | OQ-LWD-03 (`open-questions.md:3422-3425`) |
+| `credit_debt` | `user.Balance` raw + `{amount_minor, currency}` (never re-scaled), `position` `DEBT`/`CREDIT`/`ZERO`/`UNKNOWN`; a debt points to the core `legacy_debts` (PENDING_REVIEW). `overdraft_limit_raw` only when the core stages `user.maxbuyagent` | `function.php:974` (n2 may go to `-maxbuyagent`, 0 = none) |
+| `current_status` | tier active at backup time, `User_Status` raw, agent expiry (`NOT_STAGED` / `NO_EXPIRY` / parsed unix), raw `agent_manage` status values (`COLUMN_NAME_CONVENTION_UNPROVEN`), `nexa_status: NOT_A_RESELLER` | `cronbot/expireagent.php:13-18` demotes to `f` after `expire` |
+| `pricing` | number of custom price levels, `has_custom_prices`, `user.pricediscount` raw when staged | levels never merged; tier-wide JSON prices live in other modules |
+| `limits` | overdraft/expiry raw, which `user` limit columns are staged, `agent_manage` **column names** only | — |
+| `owner_decisions` | subset of `ROLE`, `NOT_CUSTOMER`, `DEBT_REVIEW`, `OVERDRAFT_LIMIT`, `CUSTOM_PRICES`, `LIMITS_NOT_STAGED`, `FORK_SCHEMA_UNPROVEN` | — |
+
+`agents_state` reports `agents`, `with_custom_prices`, `role_candidates`, `by_position`, `debt_sum_minor` /
+`credit_sum_minor` (raw units, strings), `overdraft_limits_positive`, `owner_decisions` counts, `history_rows`,
+`limits_staged`, `role_active_true: 0` and `credit_granted_true: 0`. Two aggregate reviews (one row each):
+`AGENT_OWNER_DECISION_REQUIRED` (reason `ROLE_CREDIT_PRICING_NOT_MIGRATED`) and, while the core does not stage
+them, `AGENT_LIMITS_NOT_STAGED` (reason `CORE_USER_OPTIONAL_COLUMNS_MISSING`).
+
+Per-row review codes are bounded: the first 20 per (code, table) are listed, the rest become one aggregate row
+`{aggregated: true, rows, total_rows, reason}`. Every review row carries a `reason` tag.
 
 For the fork tables, the owner column is the first column present from `user_id`, `id_user`, `iduser`,
 `userid`, `agent_id`, `id_agent`, `chat_id`, `telegram_id` and `from_id`. Mirza uses these names for a
@@ -50,6 +76,8 @@ So every such relation is marked `COLUMN_NAME_CONVENTION_UNPROVEN`, and a row wi
 review as `AGENT_OWNER_UNKNOWN`.
 
 Review codes (all `warning`; none blocks):
+* `AGENT_OWNER_DECISION_REQUIRED` (aggregate, one row)
+* `AGENT_LIMITS_NOT_STAGED` (aggregate, one row)
 * `AGENT_NOT_CUSTOMER`
 * `AGENT_OWNER_UNKNOWN`
 * `AGENT_MULTIPLE_PRICE_LEVELS`
@@ -126,7 +154,30 @@ The proposal maps the archive onto these concepts. It does not invent a second m
 | `custom_service_tier_prices.*` | UNKNOWN | UNKNOWN | `tier_prices` (one per level) | `custom_service_price_rules` (manual) | **UNKNOWN schema** |
 | `requestagent.*` | UNKNOWN | UNKNOWN | `agent_requests` (`…fork`) | none | **UNKNOWN schema** |
 
-## 5. Blocked until the owner decides
+## 5. Owner decision table (one row per agent in `state.jsonl`)
+
+| Decision | Applies when (`owner_decisions`) | Options | Default if no decision | What the converter does |
+|---|---|---|---|---|
+| Make the agent a NEXA reseller? | `ROLE` | (a) ordinary customer; (b) reseller in tier X (operator picks `reseller_tiers.id`, grants) | (a) — OQ-LWD-03 | `role_proposal` only; `role_active: false` |
+| Agent is not an imported customer | `NOT_CUSTOMER` | fix the user row and re-run; or keep archive only | archive only | history archived, nothing linked |
+| Negative balance (debt) | `DEBT_REVIEW` | collect / write off / keep as legacy debt | legacy debt `PENDING_REVIEW` (core) | sign + raw amount only; nothing settled |
+| `n2` overdraft cap | `OVERDRAFT_LIMIT` (needs `maxbuyagent` staged) | drop; or a future NEXA credit feature | drop (NEXA credit = 0, 2026-10-01) | raw cap shown, never granted |
+| Custom price levels | `CUSTOM_PRICES` | recreate by hand as `custom_service_price_rules` after the fork DDL is proven; or drop | drop | each level archived separately |
+| Agent expiry / discount % | `LIMITS_NOT_STAGED` (or values present once staged) | re-enter in NEXA by hand; or drop | drop | raw reference only |
+| Fork tables meaning | `FORK_SCHEMA_UNPROVEN` | supply redacted `SHOW CREATE TABLE` | archive only | raw rows, `semantics: UNKNOWN` |
+
+### Staging request to the core (lead-owned files, not this module)
+
+Add to `mapping/rules.py` `OPTIONAL_COLUMNS["user"]` and `core_specs.py` sensitivities. The agents module
+already reads them when present; nothing else changes.
+
+| Column | Sensitivity | Why | Evidence (mirza_pro@b645db74) |
+|---|---|---|---|
+| `maxbuyagent` | FINANCIAL | n2 overdraft cap (raw money units); shows debt exposure per agent | `db/tables/user.php:32`; writer `admin.php:4166-4177` (digits only); reader `function.php:974`, `api/miniapp.php:908` |
+| `expire` | PUBLIC | agent-role expiry (unix seconds; NULL = none) | `db/tables/user.php:39`; writer `admin.php:8920-8933`; cleared `admin.php:5145`; demotion `cronbot/expireagent.php:13-18` |
+| `pricediscount` | PUBLIC | per-user percent discount 0..100 (agent pricing) | `db/tables/user.php:30`; writer `admin.php:4158-4164`; applied `index.php:1443-1444,1619-1620` |
+
+## 6. Blocked until the owner decides
 
 * **OQ-LWD-03.** Does any legacy agent become a NEXA reseller, with which tier and which grants?
   Default: no.

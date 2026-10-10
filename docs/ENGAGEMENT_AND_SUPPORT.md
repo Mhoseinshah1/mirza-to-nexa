@@ -77,6 +77,49 @@ discount. While Mirza is still running, a leaked code is worth money. So:
     local time (`OK_TEHRAN_LOCAL`) and never shifted.
   * A year below 1600 gives `JALALI_SUSPECTED`. Anything else gives `FORMAT_UNKNOWN`, with the raw value kept.
 
+### Code lifecycle (`discounts_state`)
+
+Every code row also gets `lifecycle_state`, `lifecycle_reason`, `remaining_uses` and (wallet gifts only)
+`outstanding_gift_value`. The classes come from Mirza's own refusal rules, not from guesses:
+
+| Kind | State | Rule (reason) | Evidence (mirza_pro@b645db74) |
+|---|---|---|---|
+| `Discount` (wallet gift) | `USED` | `limitused >= limituse` (`LIMIT_REACHED`; includes `limituse` 0) | refusal `index.php:5759` |
+| | `HAS_FINANCIAL_OBLIGATION` | uses remain and `price` > 0; outstanding = remaining × price (`REMAINING_USES_CREDIT_WALLET`) | credit `index.php:5776` (`addBalance`), counter `:5778-5779`, once per user `:5763-5769` |
+| | `ACTIVE_UNUSED` | uses remain but `price` = 0 (`REMAINING_USES_ZERO_VALUE`) | — |
+| | `UNKNOWN` | counters unreadable (`COUNTERS_UNREADABLE`) or price unreadable while uses remain (`GIFT_AMOUNT_UNREADABLE`) | — |
+| | (never `EXPIRED`) | the table has no expiry column | `db/tables/Discount.php:5-9` |
+| `DiscountSell` (percent) | `USED` | `limitDiscount <= usedDiscount` (`LIMIT_REACHED`) | `index.php:1663,4189` |
+| | `EXPIRED` | `time` ≠ 0 and `as_of >= time` (`EXPIRED_BEFORE_BACKUP`) | `index.php:1655,4185` |
+| | `ACTIVE_UNUSED` | uses remain, not expired (`REMAINING_USES_PERCENT_DISCOUNT`); a percent code never credits a wallet, so it is never an obligation | `index.php:1698` |
+| | `UNKNOWN` | counters/expiry unreadable, or no `as_of` (`EXPIRY_REFERENCE_UNAVAILABLE`) | — |
+| fork `discount_sell` | `UNKNOWN` | `FORK_SCHEMA_UNPROVEN` | no public DDL |
+
+`as_of` is the newest valid `invoice.time_sell` in the backup (`lifecycle_as_of_basis: LATEST_INVOICE_TIME_SELL`),
+never the wall clock, so the result is deterministic. Mirza keeps running until cutover, so a later backup can
+move codes from `ACTIVE_UNUSED` to `EXPIRED`/`USED`.
+
+`discounts_state` (reconciliation) reports `by_state` (all five classes), `by_reason`, `by_kind`,
+`outstanding_gift_value_minor` (string, **raw source units, never re-scaled**; `null` when any gift code with
+possible remaining uses has an unreadable amount or counter — the readable part is in
+`outstanding_gift_value_known_minor`), `outstanding_gift_codes`, `outstanding_remaining_uses`,
+`gift_codes_value_unknown`, `currency`, `as_of`, and `issues_new_credit: false`, `new_codes_created: 0`,
+`redeemable_true: 0`. The outstanding figure is an **upper bound** of wallet credit Mirza would still pay if every
+remaining use were redeemed; it is an owner-decision liability figure, not a ledger entry.
+
+Aggregate reviews (one row each, never per code, never with code text or `code_ref`):
+`GIFT_OUTSTANDING_OBLIGATION`, `GIFT_VALUE_UNKNOWN`, `DISCOUNT_ACTIVE_CODES`, `DISCOUNT_STATE_UNKNOWN`.
+
+### Referral and wheel readiness (`referrals_wheel_state`)
+
+* `referrals`, `referrals_both_customers`, `referrals_party_missing`, `referrals_self`.
+* `start_gift_claimed` (`get_gift` = 1) and `start_gift_unclaimed_contingent` (`get_gift` = 0): the referee can
+  still press *get_gift_start* while Mirza runs (`index.php:5844-5866`, referrer gets `price_Discount`/2). The
+  value is read from `affiliates` at claim time, so **no amount is summed**; it is a contingent count only.
+* `wheel_spins`, `wheel_wins`, `wheel_prizes_total_minor`, `wheel_prize_already_in_legacy_balance: true`: the prize
+  is credited by `addBalance` *before* the row is written (`index.php:6253,6269`), so it is already in
+  `user.Balance`. `credited_by_package: "0"`.
+
 The `engagement` reconciliation section reports:
 * codes by kind and by state, duplicate fork codes, `used_counter_sum`, `usage_log_rows` and `usage_totals_match`;
 * usage by match, and usage rows whose customer is missing;
@@ -125,11 +168,48 @@ Every record has `applies_to_live_state: false`, `notifies_customer: false`, `cr
     `WAITING_FOR_SUPPORT` (nexa `tickets.ts:40-45`).
   * `Pending` and `close` have no proven writer. They give `UNKNOWN`, with the raw value kept, and
     `SUPPORT_STATUS_UNKNOWN`.
-  * Fork ticket statuses are always `UNKNOWN`.
+  * Fork ticket statuses are read as literal tokens with `status_basis: STATUS_TOKEN_UNPROVEN` (see State).
 * **Owner.**
   * A `support_message.iduser` or fork ticket owner that is not an imported customer (absent, not in the
     backup, or held for review) goes to `TICKET_OWNER_UNKNOWN`, severity warning.
   * The record is still archived.
+
+### State (`support_state`)
+
+| Source | Class | Rule | Basis |
+|---|---|---|---|
+| fork `ticket` | `OPEN` / `ANSWERED` / `CLOSED` / `UNKNOWN` | literal reading of the status token (`status`/`state`/`ticket_status` column): open, new, pending, waiting, unseen, customerresponse → OPEN; answered, replied → ANSWERED; closed, close, resolved, done → CLOSED; anything else (e.g. `7`) → UNKNOWN with `status_raw` | `status_basis: STATUS_TOKEN_UNPROVEN` (no public DDL or writer) |
+| `support_message` thread | state of its **last** message | `Unseen` (`index.php:3224`) and `Customerresponse` (`:3290`) → OPEN; `Answered` (`:3264`) → ANSWERED; `Pending`/`close` → UNKNOWN | proven writers |
+
+`support_state` reports `tickets`, `open_tickets`, `tickets_by_status`, `ticket_messages`,
+`ticket_message_orphans`, `support_messages`, `support_threads`, `support_threads_by_state`,
+`support_threads_open`, `imported_into_nexa_tickets: false`, and `creates_ticket_true`, `sends_message_true`,
+`notifies_customer_true` (always 0).
+
+**Open items are an owner decision, never re-opened.** One aggregate review each:
+`TICKET_OPEN_OWNER_DECISION` (`tickets`, up to 20 `sample_pks`) and `SUPPORT_THREAD_OPEN_OWNER_DECISION`
+(`threads`). The owner should answer or close them in Mirza before cutover; nothing is created in NEXA and no
+customer is messaged (`creates_ticket`, `sends_message`, `notifies_customer` are `false` on every record).
+
+### Where legacy support history belongs in NEXA (proposal)
+
+Every support record carries `nexa_view: LEGACY_READ_ONLY_THREAD_UNDER_CUSTOMER_SUPPORT`:
+
+* Shown **read-only** inside the customer's support section (admin panel → customer → support), as
+  "legacy Mirza conversations", separate from live NEXA tickets (nexa-bot@9e604def
+  `packages/contracts/src/tickets.ts:40-45` statuses are for live tickets only).
+* One thread per `thread_ref` (support_message) or per fork ticket, messages ordered by `seq`; the legacy
+  status is shown as a label (`thread_state` / ticket `status` + basis), never mapped to a live NEXA status.
+* No reply box, no notification, no SLA timers; replying means opening a **new** NEXA ticket by hand.
+* Keyed by `idempotency_key`; re-import is a no-op. Needs an approved NEXA importer (`docs/NEXA_IMPORTER_PLAN.md`).
+
+### Bounded review output
+
+Per-row findings (`TICKET_OWNER_UNKNOWN`, `TICKET_MESSAGE_ORPHAN`, `DISCOUNT_USAGE_*`, `REFERRAL_*`,
+`WHEEL_CUSTOMER_MISSING`, `DISCOUNT_AMOUNT_UNREADABLE`, `AGENT_*`) list the first 20 rows per (code, table); the
+rest become one aggregate row `{aggregated: true, rows, total_rows, reason}`. With the operator's real sizes
+(`wheel_list` 92,257, `reagent_report` 11,805, `discount_sell_used` 3,991) the queue stays small and the counts stay
+exact. Every review row of these modules carries a `reason` tag.
 
 The `support` reconciliation section reports:
 * departments, messages, threads, unknown owners and statuses, unreadable times, status proposals;
@@ -138,8 +218,12 @@ The `support` reconciliation section reports:
 
 ## Owner decisions needed
 
-* **OQ-M2N-EN-02.** Unredeemed gift and discount codes are an outstanding liability. Should any of them be
-  honoured in NEXA as **new** NEXA codes, or lapse at cutover? The default is lapse: nothing is redeemable.
+* **OQ-M2N-EN-02.** Unredeemed gift and discount codes are an outstanding liability
+  (`discounts_state.outstanding_gift_value_minor`, per class in `by_state`). Should any of them be
+  honoured in NEXA as **new** NEXA codes or credit, or lapse at cutover? The default is lapse: nothing is
+  redeemable and the converter never issues credit.
+* **Open tickets / unanswered threads** (`support_state.open_tickets`, `support_threads_open`). Close or answer
+  them in Mirza before cutover; the converter never re-opens them in NEXA.
 * **OQ-M2N-EN-03.** Per-code usage history is lost because the codes are SECRET. If the owner needs it,
   the framework would have to compute a keyed digest **at parse time** before dropping the column. That
   is a staging change, not this module's.

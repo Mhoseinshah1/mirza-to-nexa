@@ -14,6 +14,7 @@ from ..errors import MigrationError
 
 # Registration side effects (order matters only for readability; modules declare their own order).
 from . import (  # noqa: F401
+    adoption,
     agents,
     config_tables,
     core_specs,
@@ -29,6 +30,7 @@ from .base import _MODULES, Module, ModuleContext, modules_in_order, register_mo
 #: Converter modules that MUST be registered for a conversion to start.
 EXPECTED_MODULES: frozenset[str] = frozenset({
     "generic", "payments", "wallet_history", "services_ext", "agents", "engagement", "support", "config_tables",
+    "adoption",
 })
 
 #: Every Mirza table the catalogue MUST know (docs/evidence/mirza_tables.json + ``protocol``).

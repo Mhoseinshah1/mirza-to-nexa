@@ -14,6 +14,11 @@ its resellers so the owner can decide later (``docs/RESELLER_CONTRACT.md``):
                                        ``custom_service_tier_prices`` row; several levels of one agent
                                        stay several records (``level_index``/``levels_for_owner``)
 ``records/agents/agent_requests.jsonl`` ``legacy_agent_request``  (``Requestagent`` + ``requestagent``)
+``records/agents/state.jsonl``          ``legacy_agent_state`` — one per profile owner: archivable history
+                                       counts per table, a role *proposal* (``role_active: false``), the raw
+                                       balance position (``user.Balance`` sign; overdraft cap only when the
+                                       core stages ``user.maxbuyagent``), status, pricing/limit facts and the
+                                       owner decisions it needs. Reconciliation section ``agents_state``.
 
 Every record carries ``activates_role: false``, ``grants_credit: false``,
 ``affects_wallet: false`` and ``applies_to_live_state: false``. Money-like fields of agent tables
@@ -138,6 +143,43 @@ def parse_time(raw: str | None) -> tuple[str | None, str]:
     return None, "FORMAT_UNKNOWN"
 
 
+#: Per (code, table): individual review rows emitted before the rest are aggregated into one row.
+REVIEW_SAMPLE_LIMIT = 20
+
+
+class ReviewBudget:
+    """Bounded review emission: the first ``limit`` findings per (code, table) are listed one by one
+    (with a ``reason`` tag), the remainder becomes ONE aggregate row on :meth:`flush`.
+
+    A 92k-row table with a systematic issue must not produce 92k review rows; the counts stay exact.
+    """
+
+    def __init__(self, ctx: ModuleContext, entity: str, limit: int = REVIEW_SAMPLE_LIMIT):
+        self.ctx, self.entity, self.limit = ctx, entity, limit
+        self.total: dict[tuple[str, str], int] = {}
+        self.meta: dict[tuple[str, str], tuple[str, str, str | None, str]] = {}
+
+    def add(self, *, kind: str, code: str, table: str, pk: str | None, reason: str,
+            data: dict[str, Any] | None = None, message: str | None = None, severity: str = "warning") -> None:
+        k = (code, table)
+        n = self.total.get(k, 0) + 1
+        self.total[k] = n
+        if n <= self.limit:
+            self.ctx.review(kind=kind, code=code, entity=self.entity, table=table, pk=pk, severity=severity,
+                            data={**(data or {}), "reason": reason}, message=message)
+        elif k not in self.meta:
+            self.meta[k] = (kind, reason, message, severity)
+
+    def flush(self) -> None:
+        for k in sorted(self.meta):
+            kind, reason, message, severity = self.meta[k]
+            n = self.total[k]
+            self.ctx.review(kind=kind, code=k[0], entity=self.entity, table=k[1], pk=None, severity=severity,
+                            data={"aggregated": True, "rows": n - self.limit, "total_rows": n, "reason": reason},
+                            message=message)
+        self.meta.clear()
+
+
 def pk_sort_key(pk: str | None) -> tuple[int, int, str]:
     if pk is not None and pk.isdigit():
         return (0, int(pk), pk)
@@ -167,7 +209,8 @@ class RowKeys:
     def finish(self, entity: str) -> None:
         if self.dups:
             self.ctx.review(kind="archive", code="ARCHIVE_DUPLICATE_PK", entity=entity, table=self.stats.name,
-                            pk=None, severity="warning", data={"duplicates": self.dups},
+                            pk=None, severity="warning",
+                            data={"duplicates": self.dups, "reason": "DUPLICATE_PRIMARY_KEY"},
                             message="کلید اصلی تکراری در جدول آرشیوی؛ همه ردیف‌ها با پسوند متمایز حفظ شدند.")
 
 
@@ -177,7 +220,7 @@ def account_unstaged(ctx: ModuleContext, spec_names: list[str], entity: str) -> 
         if t.spec_name in spec_names and not t.sql_name and t.rows:
             ctx.coverage(t.name, review=t.rows, status="review")
             ctx.review(kind="table", code="TABLE_NOT_STAGED", entity=entity, table=t.name, pk=None,
-                       severity="warning", data={"rows": t.rows},
+                       severity="warning", data={"rows": t.rows, "reason": "NO_STORABLE_COLUMN"},
                        message="هیچ ستون قابل‌ذخیره‌ای در این جدول نبود؛ ردیف‌ها شمرده شدند ولی منتقل نشدند.")
 
 
@@ -185,7 +228,8 @@ def schema_unproven(ctx: ModuleContext, stats, entity: str, spec: TableSpec | No
     if stats.rows:
         ctx.review(kind="table", code="TABLE_NEEDS_DECISION", entity=entity, table=stats.name, pk=None,
                    severity="warning",
-                   data={"rows": stats.rows, "open_questions": list(spec.open_questions) if spec else []},
+                   data={"rows": stats.rows, "open_questions": list(spec.open_questions) if spec else [],
+                         "reason": "FORK_SCHEMA_UNPROVEN"},
                    message="معنای این جدول قطعی نیست؛ داده‌ها فقط آرشیو شدند و تصمیم مالک لازم است.")
 
 
@@ -255,12 +299,30 @@ def _base(record_type: str, schema: str, key: str, table: str, pk: str | None) -
             "source_pk": pk}
 
 
-def _agents_from_users(ctx: ModuleContext) -> tuple[dict[str, dict[str, Any]], dict[str, int]]:
+#: ``user`` columns the state summary reads when the core stages them (see ``USER_LIMIT_COLUMNS``).
+USER_LIMIT_COLUMNS = {
+    # column: (meaning, evidence)
+    "maxbuyagent": ("n2 overdraft cap in raw money units: balance may go down to -maxbuyagent",
+                    f"{MIRZA_PRO} db/tables/user.php:32; admin.php:4166-4177 (writer, digits only); "
+                    "function.php:974 (n2 only, 0 = no overdraft)"),
+    "expire": ("agent-role expiry, PHP time() unix seconds; NULL = none",
+               f"{MIRZA_PRO} db/tables/user.php:39; admin.php:8920-8933 (writer); admin.php:5145 (cleared on grant); "
+               "cronbot/expireagent.php:13-18 (demotes agent to 'f' when passed)"),
+    "pricediscount": ("per-user percent off product prices, 0..100; 0 = none",
+                      f"{MIRZA_PRO} db/tables/user.php:30; admin.php:4158-4164 (writer, 0..100); "
+                      "index.php:1443-1444,1619-1620 (applied)"),
+}
+
+
+def _agents_from_users(ctx: ModuleContext) -> tuple[dict[str, dict[str, Any]], dict[str, int], dict[str, bool]]:
     agents: dict[str, dict[str, Any]] = {}
     tiers: dict[str, int] = {}
+    staged = {c: False for c in USER_LIMIT_COLUMNS}
     for stats in ctx.tables_for("user"):
         if "agent" not in stats.stored_columns:
             continue
+        for c in USER_LIMIT_COLUMNS:
+            staged[c] = staged[c] or c in stats.stored_columns
         for _rowno, row in ctx.rows(stats, order_by=["id"]):
             ctx.tick()
             raw = row.get("agent")
@@ -272,12 +334,14 @@ def _agents_from_users(ctx: ModuleContext) -> tuple[dict[str, dict[str, Any]], d
             uid = row.get("id")
             if uid is None or uid in agents:
                 continue
-            agents[uid] = {"tier_raw": raw, "tier": tier, "user_checksum": ctx.row_checksum("user", row)}
-    return agents, tiers
+            agents[uid] = {"tier_raw": raw, "tier": tier, "user_checksum": ctx.row_checksum("user", row),
+                           "balance_raw": row.get("Balance"), "user_status_raw": row.get("User_Status"),
+                           "limits_raw": {c: row.get(c) for c in USER_LIMIT_COLUMNS if c in stats.stored_columns}}
+    return agents, tiers, staged
 
 
 def _owner_records(ctx: ModuleContext, table: str, relpath: str, record_type: str, schema: str,
-                   extra=None) -> dict[str, Any]:
+                   budget: ReviewBudget, extra=None) -> dict[str, Any]:
     """Archive one fork table row-by-row with an inferred owner relation. Returns stats."""
     out = {"rows": 0, "owner_column": None, "owner_valid": 0, "owner_missing": 0, "by_owner": {}}
     spec = ctx.spec(table)
@@ -310,8 +374,8 @@ def _owner_records(ctx: ModuleContext, table: str, relpath: str, record_type: st
                 out["owner_valid"] += 1
             else:
                 out["owner_missing"] += 1
-                ctx.review(kind="agent", code="AGENT_OWNER_UNKNOWN", entity="agents", table=stats.name, pk=pk,
-                           severity="warning",
+                budget.add(kind="agent", code="AGENT_OWNER_UNKNOWN", table=stats.name, pk=pk,
+                           reason="OWNER_NOT_IMPORTED_CUSTOMER" if owner else "NO_OWNER_COLUMN",
                            data={"owner_column": owner_col,
                                  "decision": owner["decision"] if owner else "NO_OWNER_COLUMN"},
                            message="ردیف نمایندگی به مشتری معتبری متصل نشد؛ فقط آرشیو شد.")
@@ -328,7 +392,7 @@ def _owner_records(ctx: ModuleContext, table: str, relpath: str, record_type: st
 def _tier_prices(ctx: ModuleContext) -> dict[str, Any]:
     """One record per price level; levels of the same owner are numbered, never merged."""
     out = {"rows": 0, "owners": 0, "levels_histogram": {}, "owners_with_multiple_levels": 0, "owner_column": None,
-           "unowned_rows": 0}
+           "unowned_rows": 0, "by_owner": {}}
     tables = ctx.tables_for("custom_service_tier_prices")
     if not tables:
         return out
@@ -379,6 +443,7 @@ def _tier_prices(ctx: ModuleContext) -> dict[str, Any]:
             if not gkey:
                 continue
             out["owners"] += 1
+            out["by_owner"][gkey] = out["by_owner"].get(gkey, 0) + c
             out["levels_histogram"][str(c)] = out["levels_histogram"].get(str(c), 0) + 1
             if c > 1:
                 out["owners_with_multiple_levels"] += 1
@@ -387,13 +452,13 @@ def _tier_prices(ctx: ModuleContext) -> dict[str, Any]:
     if out["owners_with_multiple_levels"]:
         ctx.review(kind="agent", code="AGENT_MULTIPLE_PRICE_LEVELS", entity="agents",
                    table="custom_service_tier_prices", pk=None, severity="warning",
-                   data={"owners": out["owners_with_multiple_levels"]},
+                   data={"owners": out["owners_with_multiple_levels"], "reason": "SEVERAL_PRICE_LEVELS_NOT_MERGED"},
                    message="برای برخی نمایندگان چند سطح قیمت ثبت شده؛ همه سطوح جداگانه حفظ شدند و هیچ‌کدام اعمال نمی‌شود.")
     return out
 
 
-def _requests(ctx: ModuleContext) -> dict[str, Any]:
-    out = {"rows": 0, "by_status": {}, "requester_not_customer": 0}
+def _requests(ctx: ModuleContext, budget: ReviewBudget) -> dict[str, Any]:
+    out = {"rows": 0, "by_status": {}, "requester_not_customer": 0, "by_requester": {}}
     tables = ctx.tables_for("Requestagent") + ctx.tables_for("requestagent")
     if not tables:
         return out
@@ -434,10 +499,13 @@ def _requests(ctx: ModuleContext) -> dict[str, Any]:
             sink.write(rec)
             n += 1
             out["by_status"][status] = out["by_status"].get(status, 0) + 1
+            if requester is not None and requester["raw_id"] is not None:
+                rid = requester["raw_id"]
+                out["by_requester"][rid] = out["by_requester"].get(rid, 0) + 1
             if requester is None or not requester["valid"]:
                 out["requester_not_customer"] += 1
-                ctx.review(kind="agent", code="AGENT_REQUEST_REQUESTER_UNKNOWN", entity="agents", table=stats.name,
-                           pk=pk, severity="warning",
+                budget.add(kind="agent", code="AGENT_REQUEST_REQUESTER_UNKNOWN", table=stats.name, pk=pk,
+                           reason="REQUESTER_NOT_IMPORTED_CUSTOMER" if requester else "NO_OWNER_COLUMN",
                            data={"decision": requester["decision"] if requester else "NO_OWNER_COLUMN"},
                            message="درخواست نمایندگی متعلق به مشتری معتبری نیست؛ فقط آرشیو شد.")
         keys.finish("agents")
@@ -450,8 +518,109 @@ def _requests(ctx: ModuleContext) -> dict[str, Any]:
     return out
 
 
+HISTORY_TABLES = ("agent_manage", "agent_invoice", "agent_log", "agent_usage_snapshot", "custom_service_tier_prices",
+                  "agent_requests")
+FORK_HISTORY = ("agent_manage", "agent_invoice", "agent_log", "agent_usage_snapshot", "custom_service_tier_prices")
+MANAGE_STATUS_COLUMNS = ("status", "state", "agent_status")
+
+
+def _credit_debt(ctx: ModuleContext, a: dict[str, Any] | None, staged: dict[str, bool]) -> dict[str, Any]:
+    """Raw balance position of an agent: ``user.Balance`` sign only, never a credit line."""
+    raw = a["balance_raw"] if a else None
+    bal = rules.parse_balance(raw) if a else None
+    if a is None:
+        position, parse = "UNKNOWN", "NOT_IN_USER_TABLE"
+    elif bal is None:
+        position, parse = "UNKNOWN", "UNREADABLE"
+    else:
+        position, parse = ("DEBT" if bal < 0 else "CREDIT" if bal > 0 else "ZERO"), "OK"
+    over_raw = a["limits_raw"].get("maxbuyagent") if a else None
+    over = rules.parse_balance(over_raw) if over_raw is not None else None
+    return {
+        "source": "user.Balance", "balance_raw": raw, "balance": ctx.money(bal), "balance_parse": parse,
+        "position": position,
+        # a negative balance is already a core legacy_debt (PENDING_REVIEW); nothing is settled here
+        "debt_handled_by": "core legacy_debts (PENDING_REVIEW, never auto-settled)" if position == "DEBT" else None,
+        "overdraft_limit_raw": over_raw,
+        "overdraft_limit_staged": staged.get("maxbuyagent", False),
+        "overdraft_applies": "n2 only, 0 = none (mirza_pro function.php:974)",
+        "overdraft_limit_positive": None if over is None else over > 0,
+        "credit_granted": False, "values": "RAW_ONLY_NOT_APPLIED",
+    }
+
+
+def _agent_state(ctx: ModuleContext, uid: str, a: dict[str, Any] | None, cust: dict[str, Any],
+                 items: list[dict[str, Any]], history: dict[str, int], levels: int,
+                 staged: dict[str, bool]) -> dict[str, Any]:
+    tier = a["tier"] if a else "NOT_AGENT_IN_USER_TABLE"
+    candidate = tier in TIER_FA and cust["valid"]
+    credit = _credit_debt(ctx, a, staged)
+    limits_raw = a["limits_raw"] if a else {}
+    exp_raw = limits_raw.get("expire")
+    exp_iso, exp_note = parse_time(exp_raw) if staged["expire"] and a else (None, "NOT_STAGED")
+    if staged["expire"] and a and (exp_raw is None or rules.js_trim(exp_raw) == ""):
+        exp_note = "NO_EXPIRY"
+    manage_cols = sorted({c for it in items for c in it["fields_raw"]})
+    manage_status = []
+    for it in items:
+        for c in MANAGE_STATUS_COLUMNS:
+            if c in it["fields_raw"]:
+                manage_status.append(it["fields_raw"][c])
+                break
+    decisions = []
+    if candidate:
+        decisions.append("ROLE")
+    if not cust["valid"]:
+        decisions.append("NOT_CUSTOMER")
+    if credit["position"] == "DEBT":
+        decisions.append("DEBT_REVIEW")
+    if credit["overdraft_limit_positive"]:
+        decisions.append("OVERDRAFT_LIMIT")
+    if levels:
+        decisions.append("CUSTOM_PRICES")
+    if a and not all(staged.values()):
+        decisions.append("LIMITS_NOT_STAGED")
+    if any(history.get(t, 0) for t in FORK_HISTORY):
+        decisions.append("FORK_SCHEMA_UNPROVEN")
+    return {
+        "history": {**history, "total": sum(history.values()), "archive_only": True},
+        "role_proposal": {
+            "proposed": "RESELLER_CANDIDATE" if candidate else "NONE",
+            "legacy_tier": tier, "legacy_tier_label": TIER_FA.get(tier, "UNKNOWN"),
+            "proposed_nexa_tier_id": None, "role_active": False,
+            "decision": "OWNER_DECISION_REQUIRED" if candidate else "NOT_APPLICABLE",
+            "basis": f"{NEXA} docs/open-questions.md:3422-3425 (OQ-LWD-03: import as ordinary customer)",
+        },
+        "credit_debt": credit,
+        "current_status": {
+            "mirza_tier_active_at_backup": tier in TIER_FA,
+            "user_status_raw": a["user_status_raw"] if a else None,
+            "agent_expiry": exp_iso, "agent_expiry_raw": exp_raw, "agent_expiry_note": exp_note,
+            "agent_manage_status_raw": manage_status,
+            "agent_manage_status_basis": "COLUMN_NAME_CONVENTION_UNPROVEN" if manage_status else None,
+            "nexa_status": "NOT_A_RESELLER",
+        },
+        "pricing": {
+            "custom_price_levels": levels, "has_custom_prices": levels > 0,
+            "custom_price_relation_basis": "COLUMN_NAME_CONVENTION_UNPROVEN" if levels else None,
+            "percent_discount_raw": limits_raw.get("pricediscount"),
+            "percent_discount_staged": staged["pricediscount"],
+            "tier_price_lists": "tier-wide JSON {f,n,n2} in marzban_panel/product/DiscountSell (other modules)",
+            "applies_price": False,
+        },
+        "limits": {
+            "overdraft_limit_raw": credit["overdraft_limit_raw"], "agent_expiry_raw": exp_raw,
+            "staged": dict(sorted(staged.items())),
+            "agent_manage_columns": manage_cols, "agent_manage_semantics": "UNKNOWN" if manage_cols else None,
+            "applies_limits": False,
+        },
+        "owner_decisions": decisions,
+    }
+
+
 def run(ctx: ModuleContext) -> None:
-    agents, tiers = _agents_from_users(ctx)
+    budget = ReviewBudget(ctx, "agents")
+    agents, tiers, staged = _agents_from_users(ctx)
 
     # agent_manage → embedded (raw) in profiles + its own coverage
     manage_rows: dict[str, list[dict[str, Any]]] = {}
@@ -479,15 +648,30 @@ def run(ctx: ModuleContext) -> None:
         schema_unproven(ctx, stats, "agents", spec)
         manage["rows"] += n
 
+    inv = _owner_records(ctx, "agent_invoice", "records/agents/agent_invoices.jsonl", "legacy_agent_invoice",
+                         "m2n.agents.invoice.v1", budget, extra=_invoice_relation(ctx))
+    logs = _owner_records(ctx, "agent_log", "records/agents/agent_logs.jsonl", "legacy_agent_log",
+                          "m2n.agents.log.v1", budget)
+    usage = _owner_records(ctx, "agent_usage_snapshot", "records/agents/agent_usage.jsonl", "legacy_agent_usage",
+                           "m2n.agents.usage.v1", budget)
+    prices = _tier_prices(ctx)
+    reqs = _requests(ctx, budget)
+
     owners = sorted(set(agents) | {k for k in manage_rows if k})
     sink = ctx.open("records/agents/profiles.jsonl") if owners or manage_rows.get("") else None
+    state_sink = ctx.open("records/agents/state.jsonl") if owners else None
     profiles = {"total": 0, "from_user_table": 0, "from_agent_manage_only": 0, "agent_not_customer": 0,
                 "by_tier": {}}
+    st: dict[str, Any] = {"agents": 0, "with_custom_prices": 0, "role_candidates": 0, "by_position": {},
+                          "debt_sum_minor": 0, "credit_sum_minor": 0, "overdraft_limits_positive": 0,
+                          "owner_decisions": {}, "history_rows": {t: 0 for t in HISTORY_TABLES}}
     for uid in owners:
         a = agents.get(uid)
         cust = customer_ref(ctx, uid)
         items = manage_rows.get(uid, [])
         tier = a["tier"] if a else "NOT_AGENT_IN_USER_TABLE"
+        prov = ctx.provenance("user" if a else "agent_manage", uid,
+                              a["user_checksum"] if a else (items[0]["row_checksum"] if items else None))
         rec = _base("legacy_agent_profile", "m2n.agents.profile.v1", f"legacy:agents:profile:{uid}",
                     "user" if a else "agent_manage", uid)
         rec.update({
@@ -502,17 +686,41 @@ def run(ctx: ModuleContext) -> None:
             "status": "ARCHIVED_NOT_ACTIVATED",
             "nexa_role": None,
             **FLAGS_OFF,
-            "provenance": ctx.provenance("user" if a else "agent_manage", uid,
-                                         a["user_checksum"] if a else (items[0]["row_checksum"] if items else None)),
+            "provenance": prov,
         })
         sink.write(rec)
+        history = {"agent_manage": len(items), "agent_invoice": len(inv["by_owner"].get(uid, [])),
+                   "agent_log": len(logs["by_owner"].get(uid, [])),
+                   "agent_usage_snapshot": len(usage["by_owner"].get(uid, [])),
+                   "custom_service_tier_prices": prices["by_owner"].get(uid, 0),
+                   "agent_requests": reqs["by_requester"].get(uid, 0)}
+        state = _agent_state(ctx, uid, a, cust, items, history, prices["by_owner"].get(uid, 0), staged)
+        srec = _base("legacy_agent_state", "m2n.agents.state.v1", f"legacy:agents:state:{uid}",
+                     "user" if a else "agent_manage", uid)
+        srec.update({"customer": cust, **state, "role_active": False, **FLAGS_OFF, "provenance": prov})
+        state_sink.write(srec)
+        st["agents"] += 1
+        st["with_custom_prices"] += 1 if state["pricing"]["has_custom_prices"] else 0
+        st["role_candidates"] += 1 if state["role_proposal"]["proposed"] == "RESELLER_CANDIDATE" else 0
+        pos = state["credit_debt"]["position"]
+        st["by_position"][pos] = st["by_position"].get(pos, 0) + 1
+        amt = state["credit_debt"]["balance"]["amount_minor"]
+        if pos == "DEBT":
+            st["debt_sum_minor"] += -int(amt)
+        elif pos == "CREDIT":
+            st["credit_sum_minor"] += int(amt)
+        st["overdraft_limits_positive"] += 1 if state["credit_debt"]["overdraft_limit_positive"] else 0
+        for d in state["owner_decisions"]:
+            st["owner_decisions"][d] = st["owner_decisions"].get(d, 0) + 1
+        for t, c in history.items():
+            st["history_rows"][t] += c
         profiles["total"] += 1
         profiles["by_tier"][tier] = profiles["by_tier"].get(tier, 0) + 1
         profiles["from_user_table" if a else "from_agent_manage_only"] += 1
         if not cust["valid"]:
             profiles["agent_not_customer"] += 1
-            ctx.review(kind="agent", code="AGENT_NOT_CUSTOMER", entity="agents", table="agent_manage" if not a else "user",
-                       pk=uid, severity="warning", data={"decision": cust["decision"], "tier": tier},
+            budget.add(kind="agent", code="AGENT_NOT_CUSTOMER", table="agent_manage" if not a else "user", pk=uid,
+                       reason="AGENT_NOT_IMPORTED_CUSTOMER", data={"decision": cust["decision"], "tier": tier},
                        message="نماینده به‌عنوان مشتری معتبر منتقل نمی‌شود؛ سابقه نمایندگی فقط آرشیو شد.")
         ctx.count("agents", "converted")
     if manage_rows.get(""):
@@ -525,23 +733,37 @@ def run(ctx: ModuleContext) -> None:
                         "nexa_role": None, **FLAGS_OFF,
                         "provenance": ctx.provenance(item["source_table"], item["source_pk"], item["row_checksum"])})
             sink.write(rec)
-            ctx.review(kind="agent", code="AGENT_OWNER_UNKNOWN", entity="agents", table=item["source_table"],
-                       pk=item["source_pk"], severity="warning", data={"owner_column": manage["owner_column"]},
+            budget.add(kind="agent", code="AGENT_OWNER_UNKNOWN", table=item["source_table"], pk=item["source_pk"],
+                       reason="NO_OWNER_VALUE", data={"owner_column": manage["owner_column"]},
                        message="ردیف نمایندگی به مشتری معتبری متصل نشد؛ فقط آرشیو شد.")
             profiles["total"] += 1
             profiles["by_tier"]["UNKNOWN"] = profiles["by_tier"].get("UNKNOWN", 0) + 1
     ctx.count("agents", "source", len(owners))
-
-    inv = _owner_records(ctx, "agent_invoice", "records/agents/agent_invoices.jsonl", "legacy_agent_invoice",
-                         "m2n.agents.invoice.v1", extra=_invoice_relation(ctx))
-    logs = _owner_records(ctx, "agent_log", "records/agents/agent_logs.jsonl", "legacy_agent_log",
-                          "m2n.agents.log.v1")
-    usage = _owner_records(ctx, "agent_usage_snapshot", "records/agents/agent_usage.jsonl", "legacy_agent_usage",
-                           "m2n.agents.usage.v1")
-    prices = _tier_prices(ctx)
-    reqs = _requests(ctx)
     account_unstaged(ctx, AGENT_TABLES, "agents")
 
+    if st["agents"]:
+        ctx.review(kind="agent", code="AGENT_OWNER_DECISION_REQUIRED", entity="agents", table="user", pk=None,
+                   severity="warning",
+                   data={"agents": st["agents"], "role_candidates": st["role_candidates"],
+                         "reason": "ROLE_CREDIT_PRICING_NOT_MIGRATED"},
+                   message="برای هر نماینده تصمیم مالک لازم است (نقش، قیمت، سقف بدهی)؛ هیچ‌کدام خودکار اعمال نمی‌شود.")
+    missing = sorted(c for c, ok in staged.items() if not ok)
+    if agents and missing:
+        ctx.review(kind="agent", code="AGENT_LIMITS_NOT_STAGED", entity="agents", table="user", pk=None,
+                   severity="warning", data={"columns": missing, "reason": "CORE_USER_OPTIONAL_COLUMNS_MISSING"},
+                   message="ستون‌های سقف بدهی/انقضا/درصد تخفیف نماینده در مرحله اصلی خوانده نمی‌شوند؛ فقط برای اطلاع.")
+    budget.flush()
+
+    for k in ("by_position", "owner_decisions"):
+        st[k] = dict(sorted(st[k].items()))
+    st.update({
+        "debt_sum_minor": str(st["debt_sum_minor"]), "credit_sum_minor": str(st["credit_sum_minor"]),
+        "currency": ctx.currency, "money_basis": "user.Balance raw units, sign only; never re-scaled or applied",
+        "limits_staged": dict(sorted(staged.items())),
+        "role_active_true": 0, "credit_granted_true": 0,
+        "decision": "proposal only: no reseller role, price, limit or credit is created (OQ-LWD-03)",
+    })
+    ctx.reconciliation("agents_state", st)
     ctx.reconciliation("agents", {
         "decision": "OQ-LWD-03: archive only — no role, tier, price or credit is applied",
         "user_table_agents": sum(tiers.values()),
@@ -551,8 +773,8 @@ def run(ctx: ModuleContext) -> None:
         "agent_invoice": {k: v for k, v in inv.items() if k != "by_owner"},
         "agent_log": {k: v for k, v in logs.items() if k != "by_owner"},
         "agent_usage_snapshot": {k: v for k, v in usage.items() if k != "by_owner"},
-        "price_levels": prices,
-        "agent_requests": reqs,
+        "price_levels": {k: v for k, v in prices.items() if k != "by_owner"},
+        "agent_requests": {k: v for k, v in reqs.items() if k != "by_requester"},
         "activates_role_true": 0,
         "grants_credit_true": 0,
     })
@@ -560,6 +782,10 @@ def run(ctx: ModuleContext) -> None:
         {"entity": "agent_profiles", "source_table": "user.agent + agent_manage", "source_columns": ["agent"],
          "target": "records/agents/profiles.jsonl (archive; NEXA reseller import not approved)", "status": "archived",
          "note": "tiers n/n2 per mirza_pro admin.php:5137-5140; agent_manage relation inferred"},
+        {"entity": "agent_state", "source_table": "user + agent tables",
+         "source_columns": ["agent", "Balance", "User_Status", *sorted(c for c, ok in staged.items() if ok)],
+         "target": "records/agents/state.jsonl (owner-decision summary)", "status": "review",
+         "note": "role_active=false; balance sign raw only; limits read only when the core stages them"},
         {"entity": "agent_price_levels", "source_table": "custom_service_tier_prices", "source_columns": ["*"],
          "target": "records/agents/tier_prices.jsonl", "status": "review",
          "note": "no public DDL; one record per level, never collapsed"},

@@ -42,11 +42,14 @@ REQUIRED_COLUMNS: dict[str, tuple[str, ...]] = {
 }
 # Optional columns read when present. user.User_Status is NEXA's separate `user-status`
 # read set (read-set.ts:395-399); invoice archive optional columns from
-# invoice-archive-read-set.ts:23-32; product review optional columns from products-read-set.ts:20-35.
+# invoice-archive-read-set.ts:23-32; product review optional columns from products-read-set.ts:20-35
+# (+ status_product: mirza_pro db/tables/product.php:32, sale status, read by modules/adoption.py).
 OPTIONAL_COLUMNS: dict[str, tuple[str, ...]] = {
-    "user": ("agent", "number", "username"),
+    # maxbuyagent/expire/pricediscount: agent overdraft cap, role expiry, per-user discount %
+    # (mirza_pro db/tables/user.php:30,32,39) — read by modules/agents.py, never applied.
+    "user": ("agent", "number", "username", "maxbuyagent", "expire", "pricediscount"),
     "invoice": ("Service_location", "time_sell", "name_product"),
-    "product": ("agent", "name_product", "price_product", "Volume_constraint", "Location", "Service_time",
+    "product": ("agent", "status_product", "name_product", "price_product", "Volume_constraint", "Location", "Service_time",
                 "Category", "category", "note", "data_limit_reset", "one_buy_status", "hide_panel"),
 }
 # Columns that may hold secrets or credentials and are NEVER read

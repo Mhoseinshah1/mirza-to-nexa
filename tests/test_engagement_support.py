@@ -5,12 +5,13 @@ from __future__ import annotations
 import pytest
 
 from conftest import make_backup, read_jsonl, run
+from mirza2nexa.modules.engagement import classify_gift, classify_percent
 from mirza2nexa.modules.support import fake_bot_token
 from mirza2nexa.nxpkg import PackageReader
 from mirza2nexa.synth import TG_BASE
 
-PLAINTEXT_CODES = ("SYNGIFT-UNUSED", "SYNGIFT-USED", "SYNGIFT-MISMATCH", "SYNGIFT-BAD", "SYNSELL10",
-                   "SYNSELL-AGENT", "SYNFORK5", "SYN-DELETED-CODE")
+PLAINTEXT_CODES = ("SYNGIFT-UNUSED", "SYNGIFT-USED", "SYNGIFT-MISMATCH", "SYNGIFT-BAD", "SYNGIFT-ZERO", "SYNSELL10",
+                   "SYNSELL-AGENT", "SYNSELL-OLD", "SYNSELL-ZERO", "SYNFORK5", "SYN-DELETED-CODE")
 PERSONAL_TEXT = ("سرویسم وصل نمی‌شود", "پیام بدون صاحب", "کار نمی‌کند", "orphan message", "مشکل اتصال", "سارا")
 OWNED = ("Discount", "DiscountSell", "discount_sell", "discount_sell_used", "Giftcodeconsumed", "affiliates",
          "reagent_report", "wheel_list", "ad_campaign", "support_message", "ticket", "ticket_message", "departman")
@@ -111,7 +112,8 @@ def test_referral_to_missing_user_and_self_referral(conv):
     assert sorted(r["data"]["missing"] for r in rq) == [["referee"], ["referrer"]]
     assert any(r["code"] == "REFERRAL_SELF" for r in review(res))
     rec = res.report["reconciliation"]["engagement"]["referrals"]
-    assert rec == {"total": 4, "both_customers": 1, "party_missing": 2, "self_referral": 1, "gift_paid": 1}
+    assert rec == {"total": 4, "both_customers": 1, "party_missing": 2, "self_referral": 1, "gift_paid": 1,
+                   "gift_unclaimed": 3}
     assert all(r["pays_commission"] is False for r in refs.values())
 
 
@@ -157,7 +159,10 @@ def test_personal_text_never_in_reports_or_review(conv):
             assert set(r["data"]) <= {"decision", "owner_column", "ticket_column", "messages", "rows",
                                       "open_questions", "missing", "code_match", "used_count", "consumed_rows",
                                       "parse", "codes", "duplicates", "tier", "owners",
-                                      "used_counter_sum"}
+                                      "used_counter_sum", "reason", "aggregated", "total_rows",
+                                      "remaining_uses", "tickets", "sample_pks", "threads", "agents",
+                                      "role_candidates", "columns"}
+            assert r["data"].get("reason"), r["code"]
 
 
 def test_ticket_without_valid_owner(conv):
@@ -223,3 +228,156 @@ def test_engagement_support_deterministic(tmp_path):
         assert fa
         for p in fa:
             assert p.read_bytes() == (b.stage_dir / "records" / domain / p.name).read_bytes(), p.name
+
+
+# ---- discount lifecycle (discounts_state) ------------------------------------------------
+
+def test_discount_lifecycle_per_code(conv):
+    res, _ = conv
+    d = {(x["source_table"], x["source_pk"]): x for x in recs(res, "engagement", "discounts")}
+    expect = {
+        ("Discount", "1"): ("HAS_FINANCIAL_OBLIGATION", 10, "500000"),
+        ("Discount", "2"): ("HAS_FINANCIAL_OBLIGATION", 2, "40000"),
+        ("Discount", "3"): ("USED", 0, "0"),
+        ("Discount", "4"): ("UNKNOWN", None, None),
+        ("Discount", "5"): ("ACTIVE_UNUSED", 2, "0"),
+        ("DiscountSell", "1"): ("ACTIVE_UNUSED", 99, None),
+        ("DiscountSell", "2"): ("ACTIVE_UNUSED", 5, None),
+        ("DiscountSell", "3"): ("EXPIRED", 10, None),
+        ("DiscountSell", "4"): ("USED", 0, None),
+        ("discount_sell", "1"): ("UNKNOWN", None, None),
+    }
+    assert set(d) == set(expect)
+    for k, (state, remaining, outstanding) in expect.items():
+        rec = d[k]
+        assert rec["lifecycle_state"] == state, k
+        assert rec["remaining_uses"] == remaining, k
+        assert rec["outstanding_gift_value"]["amount_minor"] == outstanding, k
+        assert rec["lifecycle_reason"], k
+        assert rec["issues_new_credit"] is False and rec["redeemable"] is False and rec["grants_credit"] is False
+    assert d[("Discount", "4")]["lifecycle_reason"] == "COUNTERS_UNREADABLE"
+    assert d[("DiscountSell", "3")]["lifecycle_reason"] == "EXPIRED_BEFORE_BACKUP"
+    assert d[("DiscountSell", "3")]["lifecycle_as_of_basis"] == "LATEST_INVOICE_TIME_SELL"
+    assert d[("Discount", "1")]["owner_decision"] == "HONOUR_OR_LAPSE"
+    assert d[("Discount", "3")]["owner_decision"] is None
+
+
+def test_discounts_state_and_outstanding_gift_sum(conv):
+    res, _ = conv
+    ds = res.report["reconciliation"]["discounts_state"]
+    assert ds["by_state"] == {"USED": 2, "EXPIRED": 1, "ACTIVE_UNUSED": 3, "HAS_FINANCIAL_OBLIGATION": 2,
+                              "UNKNOWN": 2}
+    assert sum(ds["by_state"].values()) == len(recs(res, "engagement", "discounts"))
+    # raw units, not re-scaled: 10 × 50000 + 2 × 20000
+    assert ds["outstanding_gift_value_known_minor"] == "540000"
+    # one gift code has unreadable counters, so the total is not complete → null for readiness
+    assert ds["outstanding_gift_value_minor"] is None and ds["outstanding_gift_value_complete"] is False
+    assert ds["gift_codes_value_unknown"] == 1 and ds["outstanding_gift_codes"] == 2
+    assert ds["outstanding_remaining_uses"] == 12
+    assert ds["issues_new_credit"] is False and ds["new_codes_created"] == 0 and ds["redeemable_true"] == 0
+    codes = {r["code"]: r for r in review(res)}
+    assert codes["GIFT_OUTSTANDING_OBLIGATION"]["data"]["codes"] == 2
+    assert codes["GIFT_VALUE_UNKNOWN"]["data"]["codes"] == 1
+    assert codes["DISCOUNT_ACTIVE_CODES"]["data"]["codes"] == 2
+    assert codes["DISCOUNT_STATE_UNKNOWN"]["data"]["codes"] == 1
+    # no code text, no code_ref and no per-code value in the state section or its reviews
+    blob = str(ds) + str([r for r in review(res) if r["code"].startswith(("GIFT_", "DISCOUNT_"))])
+    for code in PLAINTEXT_CODES:
+        assert code not in blob
+    assert "code:" not in blob
+
+
+@pytest.mark.parametrize(("used", "limit", "amount", "expected"), [
+    (0, 10, 50000, ("HAS_FINANCIAL_OBLIGATION", "REMAINING_USES_CREDIT_WALLET", 10, 500000)),
+    (3, 5, 20000, ("HAS_FINANCIAL_OBLIGATION", "REMAINING_USES_CREDIT_WALLET", 2, 40000)),
+    (3, 3, 10000, ("USED", "LIMIT_REACHED", 0, 0)),
+    (4, 3, 10000, ("USED", "LIMIT_REACHED", 0, 0)),
+    (0, 0, 10000, ("USED", "LIMIT_REACHED", 0, 0)),
+    (0, 2, 0, ("ACTIVE_UNUSED", "REMAINING_USES_ZERO_VALUE", 2, 0)),
+    (0, 2, None, ("UNKNOWN", "GIFT_AMOUNT_UNREADABLE", 2, None)),
+    (None, 2, 100, ("UNKNOWN", "COUNTERS_UNREADABLE", None, None)),
+])
+def test_classify_gift(used, limit, amount, expected):
+    assert classify_gift(used, limit, amount) == expected
+
+
+@pytest.mark.parametrize(("used", "limit", "expiry", "as_of", "expected"), [
+    (1, 100, "0", 1_700_000_000, ("ACTIVE_UNUSED", "REMAINING_USES_PERCENT_DISCOUNT", 99)),
+    (0, 5, "1900000000", 1_700_000_000, ("ACTIVE_UNUSED", "REMAINING_USES_PERCENT_DISCOUNT", 5)),
+    (0, 5, "1700000000", 1_700_000_000, ("EXPIRED", "EXPIRED_BEFORE_BACKUP", 5)),  # time() >= time
+    (5, 5, "1600000000", 1_700_000_000, ("USED", "LIMIT_REACHED", 0)),
+    (0, 5, "1600000000", None, ("UNKNOWN", "EXPIRY_REFERENCE_UNAVAILABLE", 5)),
+    (0, 5, "soon", 1_700_000_000, ("UNKNOWN", "EXPIRY_UNREADABLE", 5)),
+    (None, 5, "0", 1_700_000_000, ("UNKNOWN", "COUNTERS_UNREADABLE", None)),
+])
+def test_classify_percent(used, limit, expiry, as_of, expected):
+    assert classify_percent(used, limit, expiry, as_of) == expected
+
+
+def test_referrals_wheel_state(conv):
+    res, _ = conv
+    rw = res.report["reconciliation"]["referrals_wheel_state"]
+    assert rw["referrals"] == 4 and rw["start_gift_claimed"] == 1 and rw["start_gift_unclaimed_contingent"] == 3
+    assert rw["wheel_spins"] == 3 and rw["wheel_wins"] == 1 and rw["wheel_prizes_total_minor"] == "5000"
+    assert rw["wheel_prize_already_in_legacy_balance"] is True and rw["credited_by_package"] == "0"
+    assert rw["referral_attribution_imported"] is False
+
+
+# ---- support state ------------------------------------------------------------------------
+
+def test_ticket_status_classes_are_labelled_unproven(conv):
+    res, _ = conv
+    tickets = {t["source_pk"]: t for t in recs(res, "support", "tickets")}
+    assert {k: t["status"] for k, t in tickets.items()} == {"1": "OPEN", "2": "CLOSED", "3": "OPEN",
+                                                            "4": "ANSWERED", "5": "UNKNOWN"}
+    assert tickets["5"]["status_raw"] == "7"
+    for t in tickets.values():
+        assert t["status_basis"] == "STATUS_TOKEN_UNPROVEN"
+        assert t["nexa_view"] == "LEGACY_READ_ONLY_THREAD_UNDER_CUSTOMER_SUPPORT"
+    assert tickets["1"]["owner_decision"] == "OPEN_TICKET_OWNER_DECISION" and tickets["2"]["owner_decision"] is None
+    st = res.report["reconciliation"]["support_state"]
+    assert st["tickets"] == 5 and st["open_tickets"] == 2
+    assert st["tickets_by_status"] == {"OPEN": 2, "ANSWERED": 1, "CLOSED": 1, "UNKNOWN": 1}
+    assert st["ticket_messages"] == 4 and st["ticket_status_basis"] == "STATUS_TOKEN_UNPROVEN"
+
+
+def test_open_tickets_never_create_or_send_anything(conv):
+    res, _ = conv
+    st = res.report["reconciliation"]["support_state"]
+    assert st["creates_ticket_true"] == 0 and st["sends_message_true"] == 0 and st["notifies_customer_true"] == 0
+    assert st["imported_into_nexa_tickets"] is False
+    for name in ("tickets", "ticket_messages", "support_messages", "departments"):
+        for r in recs(res, "support", name):
+            assert r["creates_ticket"] is False and r["sends_message"] is False
+            assert r["notifies_customer"] is False and r["applies_to_live_state"] is False
+    files = sorted(p.name for p in (res.stage_dir / "records" / "support").glob("*.jsonl"))
+    assert files == ["departments.jsonl", "support_messages.jsonl", "ticket_messages.jsonl", "tickets.jsonl"]
+    rq = [r for r in review(res) if r["code"] == "TICKET_OPEN_OWNER_DECISION"]
+    assert len(rq) == 1 and rq[0]["data"]["tickets"] == 2 and rq[0]["data"]["sample_pks"] == ["1", "3"]
+
+
+def test_support_thread_state_from_last_message(conv):
+    res, _ = conv
+    st = res.report["reconciliation"]["support_state"]
+    assert st["support_threads_by_state"] == {"OPEN": 1, "UNKNOWN": 2} and st["support_threads_open"] == 1
+    msgs = recs(res, "support", "support_messages")
+    thread = [m for m in msgs if m["customer"]["raw_id"] == str(TG_BASE + 30)]
+    assert {m["thread_state"] for m in thread} == {"UNKNOWN"}  # last message is the 'close' row
+    orphan = next(m for m in msgs if m["source_pk"] == "12")
+    assert orphan["thread_state"] == "OPEN" and orphan["message_state"] == "OPEN"
+    rq = [r for r in review(res) if r["code"] == "SUPPORT_THREAD_OPEN_OWNER_DECISION"]
+    assert len(rq) == 1 and rq[0]["data"]["threads"] == 1
+
+
+def test_state_sections_deterministic(tmp_path):
+    import json
+
+    zp, _ = make_backup(tmp_path, users=120)
+    a = run(tmp_path, zp, ws_name="a")
+    b = run(tmp_path, zp, ws_name="b")
+    for sec in ("agents_state", "discounts_state", "support_state", "referrals_wheel_state"):
+        assert json.dumps(a.report["reconciliation"][sec], sort_keys=True) == \
+            json.dumps(b.report["reconciliation"][sec], sort_keys=True), sec
+    ra = (a.stage_dir / "reports" / "review-queue.jsonl").read_bytes()
+    rb = (b.stage_dir / "reports" / "review-queue.jsonl").read_bytes()
+    assert ra == rb

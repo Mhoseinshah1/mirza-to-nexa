@@ -7,10 +7,10 @@ import json
 import pytest
 
 from conftest import make_backup, read_jsonl, run
-from mirza2nexa.modules.agents import parse_time
+from mirza2nexa.modules.agents import ReviewBudget, parse_time
 from mirza2nexa.synth import TG_BASE
 
-AGENT_FILES = ("profiles", "agent_invoices", "agent_logs", "agent_usage", "tier_prices", "agent_requests")
+AGENT_FILES = ("profiles", "agent_invoices", "agent_logs", "agent_usage", "tier_prices", "agent_requests", "state")
 AGENT_TABLES = ("agent_manage", "agent_invoice", "agent_log", "agent_usage_snapshot", "custom_service_tier_prices",
                 "Requestagent", "requestagent")
 
@@ -141,3 +141,109 @@ def test_agents_deterministic(tmp_path):
 ])
 def test_parse_time_notes(raw, note):
     assert parse_time(raw)[1] == note
+
+
+# ---- per-agent state summary (records/agents/state.jsonl, reconciliation agents_state) ----------
+
+def test_state_one_per_profile_owner_role_never_active(conv):
+    states = recs(conv, "state")
+    profiles = [p for p in recs(conv, "profiles") if p["customer"] is not None]
+    assert [s["source_pk"] for s in states] == [p["source_pk"] for p in profiles]
+    for s in states:
+        assert s["record_type"] == "legacy_agent_state" and s["idempotency_key"].startswith("legacy:agents:state:")
+        assert s["role_active"] is False and s["role_proposal"]["role_active"] is False
+        assert s["role_proposal"]["proposed_nexa_tier_id"] is None
+        assert s["credit_debt"]["credit_granted"] is False and s["pricing"]["applies_price"] is False
+        assert s["limits"]["applies_limits"] is False
+        for flag in ("activates_role", "grants_credit", "affects_wallet", "applies_to_live_state"):
+            assert s[flag] is False
+    by_pk = {s["source_pk"]: s for s in states}
+    first = by_pk[str(TG_BASE)]
+    assert first["role_proposal"]["proposed"] == "RESELLER_CANDIDATE"
+    assert first["role_proposal"]["decision"] == "OWNER_DECISION_REQUIRED"
+    assert first["pricing"]["custom_price_levels"] == 3 and first["pricing"]["has_custom_prices"] is True
+    assert first["history"]["custom_service_tier_prices"] == 3 and first["history"]["agent_manage"] == 1
+    assert first["history"]["agent_requests"] == 1  # the accepted Requestagent row
+    assert first["history"]["total"] == sum(v for k, v in first["history"].items() if type(v) is int
+                                            and k != "total")
+    ghost = by_pk["5000000400"]
+    assert ghost["role_proposal"]["proposed"] == "NONE" and "NOT_CUSTOMER" in ghost["owner_decisions"]
+    assert ghost["credit_debt"]["position"] == "UNKNOWN" and ghost["credit_debt"]["balance_parse"] == "NOT_IN_USER_TABLE"
+    assert ghost["current_status"]["agent_manage_status_basis"] == "COLUMN_NAME_CONVENTION_UNPROVEN"
+
+
+def test_state_credit_debt_is_raw_balance_sign_only(conv):
+    st = conv.report["reconciliation"]["agents_state"]
+    debt = credit = 0
+    for s in recs(conv, "state"):
+        cd = s["credit_debt"]
+        if cd["balance_parse"] != "OK":
+            continue
+        v = int(cd["balance"]["amount_minor"])
+        assert int(cd["balance_raw"]) == v  # raw units, never re-scaled
+        assert cd["position"] == ("DEBT" if v < 0 else "CREDIT" if v > 0 else "ZERO")
+        assert (cd["debt_handled_by"] is not None) == (v < 0)
+        assert ("DEBT_REVIEW" in s["owner_decisions"]) == (v < 0)
+        debt += -v if v < 0 else 0
+        credit += v if v > 0 else 0
+    assert st["debt_sum_minor"] == str(debt) and st["credit_sum_minor"] == str(credit)
+    assert sum(st["by_position"].values()) == st["agents"]
+
+
+def test_agents_state_reconciliation_contract(conv):
+    st = conv.report["reconciliation"]["agents_state"]
+    assert isinstance(st["agents"], int) and isinstance(st["with_custom_prices"], int)
+    assert st["agents"] == len(recs(conv, "state"))
+    assert st["with_custom_prices"] == 3  # first agent, last agent, ghost (synthetic tier price rows)
+    assert st["role_active_true"] == 0 and st["credit_granted_true"] == 0
+    assert st["role_candidates"] == len(range(0, 300, 53))
+    assert st["history_rows"]["custom_service_tier_prices"] == 5
+    assert st["owner_decisions"]["ROLE"] == st["role_candidates"]
+    codes = [r for r in review(conv) if r["code"] == "AGENT_OWNER_DECISION_REQUIRED"]
+    assert len(codes) == 1 and codes[0]["data"]["agents"] == st["agents"] and codes[0]["data"]["reason"]
+
+
+def test_unstaged_limits_are_reported_not_guessed(conv):
+    st = conv.report["reconciliation"]["agents_state"]
+    missing = sorted(c for c, ok in st["limits_staged"].items() if not ok)
+    rq = [r for r in review(conv) if r["code"] == "AGENT_LIMITS_NOT_STAGED"]
+    if missing:
+        assert len(rq) == 1 and rq[0]["data"]["columns"] == missing
+        for s in recs(conv, "state"):
+            if s["source_table"] == "user":
+                assert "LIMITS_NOT_STAGED" in s["owner_decisions"]
+            if not st["limits_staged"]["maxbuyagent"]:
+                assert s["credit_debt"]["overdraft_limit_raw"] is None
+            if not st["limits_staged"]["expire"]:
+                assert s["current_status"]["agent_expiry_note"] == "NOT_STAGED"
+    else:
+        assert not rq
+
+
+def test_every_agent_review_has_a_reason(conv):
+    for r in review(conv):
+        if r["entity"] == "agents":
+            assert r["data"].get("reason"), r["code"]
+
+
+class _FakeCtx:
+    def __init__(self):
+        self.rows: list[dict] = []
+
+    def review(self, **kw):
+        self.rows.append(kw)
+
+
+def test_review_budget_aggregates_large_tables():
+    ctx = _FakeCtx()
+    b = ReviewBudget(ctx, "engagement", limit=20)
+    for i in range(92):
+        b.add(kind="engagement", code="WHEEL_CUSTOMER_MISSING", table="wheel_list", pk=str(i), reason="R")
+    b.add(kind="engagement", code="REFERRAL_SELF", table="reagent_report", pk="1", reason="S")
+    b.flush()
+    wheel = [r for r in ctx.rows if r["code"] == "WHEEL_CUSTOMER_MISSING"]
+    assert len(wheel) == 21
+    agg = wheel[-1]
+    assert agg["pk"] is None and agg["data"] == {"aggregated": True, "rows": 72, "total_rows": 92, "reason": "R"}
+    assert all(r["data"]["reason"] for r in ctx.rows)
+    assert len([r for r in ctx.rows if r["code"] == "REFERRAL_SELF"]) == 1

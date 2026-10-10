@@ -27,6 +27,12 @@ name filter; there a code-named column is removed from ``fields_raw`` and export
 ``code_ref`` (``sha256("m2n:code:v1:" + source fingerprint + ":" + code)``, 24 hex). Reports and
 review data never carry a code or a ``code_ref``.
 
+**Lifecycle (``discounts_state``).** Every code row also gets ``lifecycle_state`` USED / EXPIRED /
+ACTIVE_UNUSED / HAS_FINANCIAL_OBLIGATION / UNKNOWN (``classify_gift`` / ``classify_percent``), with a
+``lifecycle_reason``, ``remaining_uses`` and, for wallet gifts, ``outstanding_gift_value`` = remaining
+uses × price (an upper bound, raw units). Expiry is judged against the newest ``invoice.time_sell`` in the
+backup (``lifecycle_as_of``), never the wall clock. Nothing is honoured: ``issues_new_credit: false``.
+
 Evidence:
 
 * ``Discount`` — botmirzapanel@92c0ed06 ``table.php:426-429`` (id, code, price); mirza_pro
@@ -70,6 +76,7 @@ from .agents import (
     MIRZA_PRO,
     NO_DDL,
     OWNER_COLUMNS,
+    ReviewBudget,
     RowKeys,
     account_unstaged,
     code_ref,
@@ -209,6 +216,75 @@ def _state(used: int | None, limit: int | None) -> str:
     return "EXHAUSTED" if limit is not None and 0 < limit <= used else "PARTIALLY_USED"
 
 
+# ---- lifecycle classes (discounts_state) ---------------------------------------------------
+USED, EXPIRED, ACTIVE_UNUSED, OBLIGATION, UNKNOWN = (
+    "USED", "EXPIRED", "ACTIVE_UNUSED", "HAS_FINANCIAL_OBLIGATION", "UNKNOWN")
+LIFECYCLE_STATES = (USED, EXPIRED, ACTIVE_UNUSED, OBLIGATION, UNKNOWN)
+
+
+def classify_gift(used: int | None, limit: int | None, amount: int | None) -> tuple[str, str, int | None, int | None]:
+    """``Discount`` (wallet gift) → ``(state, reason, remaining_uses, outstanding_minor)``.
+
+    Evidence (mirza_pro@b645db74): redemption is refused when ``limitused >= limituse``
+    (``index.php:5759``); each redemption credits ``price`` with ``addBalance`` (``index.php:5776``) and
+    bumps ``limitused`` (``index.php:5778-5779``); one use per user (``index.php:5763-5769``). The table has
+    no expiry column (``db/tables/Discount.php:5-9``), so a gift code never expires by itself.
+    ``outstanding`` = remaining uses × price: an UPPER BOUND of wallet credit Mirza would still pay out.
+    """
+    if used is None or limit is None:
+        return UNKNOWN, "COUNTERS_UNREADABLE", None, None
+    if used >= limit:
+        return USED, "LIMIT_REACHED", 0, 0
+    remaining = limit - used
+    if amount is None:
+        return UNKNOWN, "GIFT_AMOUNT_UNREADABLE", remaining, None
+    if amount == 0:
+        return ACTIVE_UNUSED, "REMAINING_USES_ZERO_VALUE", remaining, 0
+    return OBLIGATION, "REMAINING_USES_CREDIT_WALLET", remaining, remaining * amount
+
+
+def classify_percent(used: int | None, limit: int | None, expiry_raw: str | None,
+                     as_of: int | None) -> tuple[str, str, int | None]:
+    """``DiscountSell`` (percent off a purchase) → ``(state, reason, remaining_uses)``.
+
+    Evidence (mirza_pro@b645db74): refused when ``intval(time) != 0 and time() >= intval(time)``
+    (``index.php:1655``, same at ``:4185``) and when ``limitDiscount <= usedDiscount`` (``index.php:1663``,
+    ``:4189``). A percent code never credits a wallet (``index.php:1698``), so it is never an obligation.
+    Expiry is judged against ``as_of`` (the newest sale time in the backup), never the wall clock.
+    """
+    if used is None or limit is None:
+        return UNKNOWN, "COUNTERS_UNREADABLE", None
+    if limit <= used:
+        return USED, "LIMIT_REACHED", 0
+    t = rules.js_trim(expiry_raw or "")
+    if t not in {"", "0"}:
+        if not t.isdigit() or len(t) > 12:
+            return UNKNOWN, "EXPIRY_UNREADABLE", limit - used
+        if as_of is None:
+            return UNKNOWN, "EXPIRY_REFERENCE_UNAVAILABLE", limit - used
+        if as_of >= int(t):
+            return EXPIRED, "EXPIRED_BEFORE_BACKUP", limit - used
+    return ACTIVE_UNUSED, "REMAINING_USES_PERCENT_DISCOUNT", limit - used
+
+
+def backup_as_of(ctx: ModuleContext) -> tuple[int | None, str]:
+    """Newest valid ``invoice.time_sell`` (unix seconds): the backup's own 'now' for expiry checks."""
+    best: int | None = None
+    for stats in ctx.tables_for("invoice"):
+        if "time_sell" not in stats.stored_columns:
+            continue
+        cur = ctx.conn.execute(f'SELECT "c_time_sell" FROM "{stats.sql_name}"')  # noqa: S608 - staged name
+        while True:
+            batch = cur.fetchmany(5000)
+            if not batch:
+                break
+            for (raw,) in batch:
+                v, note = rules.parse_time_sell(raw)
+                if note == "OK" and v is not None and (best is None or v > best):
+                    best = v
+    return best, ("LATEST_INVOICE_TIME_SELL" if best is not None else "UNAVAILABLE")
+
+
 def _usage_index(ctx: ModuleContext) -> dict[str, int]:
     """Fork code → number of ``discount_sell_used`` rows (exact string; never exported).
 
@@ -230,7 +306,8 @@ def _codes(ctx: ModuleContext, spec_name: str, col: str) -> dict[str, int]:
     return out
 
 
-def _discounts(ctx: ModuleContext, usage: dict[str, int], rec_out: dict[str, Any]) -> None:
+def _discounts(ctx: ModuleContext, usage: dict[str, int], rec_out: dict[str, Any], ds: dict[str, Any],
+               budget: ReviewBudget) -> None:
     tables = ctx.tables_for("Discount") + ctx.tables_for("DiscountSell") + ctx.tables_for("discount_sell")
     if not tables:
         return
@@ -257,6 +334,7 @@ def _discounts(ctx: ModuleContext, usage: dict[str, int], rec_out: dict[str, Any
                         "consumed_rows": consumed,
                         "usage_link": "UNAVAILABLE_CODE_SECRET" if documented else "EXACT_STRING_DIGEST"})
             state = "UNKNOWN"
+            life, reason, remaining, outstanding = UNKNOWN, "FORK_SCHEMA_UNPROVEN", None, None
             if stats.spec_name == "Discount":
                 amount, note = rules.parse_price(row.get("price"))
                 limit, used = _int(row.get("limituse")), _int(row.get("limitused"))
@@ -264,10 +342,11 @@ def _discounts(ctx: ModuleContext, usage: dict[str, int], rec_out: dict[str, Any
                             "credit_amount_parse": note, "limit_total": limit, "limit_total_raw": row.get("limituse"),
                             "used_count": used, "used_count_raw": row.get("limitused")})
                 state = _state(used, limit)
+                life, reason, remaining, outstanding = classify_gift(used, limit, amount if note == "OK" else None)
                 rec_out["used_counter_sum"] += used or 0
                 if note != "OK":
-                    ctx.review(kind="engagement", code="DISCOUNT_AMOUNT_UNREADABLE", entity="engagement",
-                               table=stats.name, pk=pk, severity="warning", data={"parse": note},
+                    budget.add(kind="engagement", code="DISCOUNT_AMOUNT_UNREADABLE",
+                               table=stats.name, pk=pk, reason="GIFT_AMOUNT_NOT_A_WHOLE_NUMBER", data={"parse": note},
                                message="مبلغ کد هدیه قابل خواندن نیست؛ مقدار خام حفظ شد.")
             elif stats.spec_name == "DiscountSell":
                 pct = _int(row.get("price"))
@@ -288,12 +367,34 @@ def _discounts(ctx: ModuleContext, usage: dict[str, int], rec_out: dict[str, Any
                     "expires_at": exp_iso, "expires_at_raw": exp_raw, "expires_at_note": exp_note,
                 })
                 state = _state(used, limit)
+                life, reason, remaining = classify_percent(used, limit, exp_raw, ds["as_of"])
+                outstanding = None
                 rec_out["used_counter_sum"] += used or 0
             else:
                 rec.update({"code_column": code_col,
                             "code_relation_basis": "COLUMN_NAME_CONVENTION_UNPROVEN" if code_col else "UNKNOWN",
                             "fields_raw": raw_fields(ctx, stats.name, row, drop=(code_col,) if code_col else ())})
             rec["state"] = state
+            rec.update({
+                "lifecycle_state": life, "lifecycle_reason": reason, "remaining_uses": remaining,
+                "outstanding_gift_value": ctx.money(outstanding) if outstanding is not None else
+                {"amount_minor": None, "currency": None},
+                "outstanding_basis": "UPPER_BOUND_REMAINING_USES_X_PRICE" if kind == "GIFT_BALANCE_CODE" else None,
+                "lifecycle_as_of": ds["as_of"], "lifecycle_as_of_basis": ds["as_of_basis"],
+                "owner_decision": "HONOUR_OR_LAPSE" if life in {OBLIGATION, ACTIVE_UNUSED} or
+                (life == UNKNOWN and kind == "GIFT_BALANCE_CODE") else None,
+                "issues_new_credit": False,
+            })
+            ds["by_state"][life] += 1
+            ds["by_reason"][reason] = ds["by_reason"].get(reason, 0) + 1
+            ds["by_kind_state"].setdefault(kind, {}).setdefault(life, 0)
+            ds["by_kind_state"][kind][life] += 1
+            if life == OBLIGATION:
+                ds["outstanding_known"] += outstanding
+                ds["obligation_codes"] += 1
+                ds["outstanding_remaining_uses"] += remaining or 0
+            elif kind == "GIFT_BALANCE_CODE" and life == UNKNOWN:
+                ds["gift_codes_value_unknown"] += 1
             rec.update(FLAGS_OFF)
             rec["provenance"] = ctx.provenance(stats.name, pk, checksum)
             sink.write(rec)
@@ -306,7 +407,7 @@ def _discounts(ctx: ModuleContext, usage: dict[str, int], rec_out: dict[str, Any
         if dup:
             rec_out["duplicate_codes"] += dup
             ctx.review(kind="engagement", code="DISCOUNT_CODE_DUPLICATED", entity="engagement", table=stats.name,
-                       pk=None, severity="warning", data={"codes": dup},
+                       pk=None, severity="warning", data={"codes": dup, "reason": "SAME_CODE_SEVERAL_ROWS"},
                        message="یک کد چند بار در جدول تعریف شده است؛ همه ردیف‌ها جداگانه آرشیو شدند.")
         keys.finish("engagement")
         ctx.coverage(stats.name, archived=n, status=status_for(spec))
@@ -315,7 +416,7 @@ def _discounts(ctx: ModuleContext, usage: dict[str, int], rec_out: dict[str, Any
             schema_unproven(ctx, stats, "engagement", spec)
 
 
-def _usage(ctx: ModuleContext, fork: dict[str, int], rec_out: dict[str, Any]) -> None:
+def _usage(ctx: ModuleContext, fork: dict[str, int], rec_out: dict[str, Any], budget: ReviewBudget) -> None:
     tables = ctx.tables_for("Giftcodeconsumed") + ctx.tables_for("discount_sell_used")
     if not tables:
         return
@@ -350,13 +451,13 @@ def _usage(ctx: ModuleContext, fork: dict[str, int], rec_out: dict[str, Any]) ->
             n += 1
             rec_out["usage_by_match"][match] = rec_out["usage_by_match"].get(match, 0) + 1
             if match == "NONE":
-                ctx.review(kind="engagement", code="DISCOUNT_USAGE_CODE_UNKNOWN", entity="engagement",
-                           table=stats.name, pk=pk, severity="warning", data={"code_match": match},
+                budget.add(kind="engagement", code="DISCOUNT_USAGE_CODE_UNKNOWN", table=stats.name, pk=pk,
+                           reason="CODE_NOT_IN_CODE_TABLE", data={"code_match": match},
                            message="کد استفاده‌شده در جدول کدها پیدا نشد (احتمالاً حذف شده)؛ سابقه حفظ شد.")
             if cust is None or not cust["valid"]:
                 rec_out["usage_customer_missing"] += 1
-                ctx.review(kind="engagement", code="DISCOUNT_USAGE_CUSTOMER_MISSING", entity="engagement",
-                           table=stats.name, pk=pk, severity="warning",
+                budget.add(kind="engagement", code="DISCOUNT_USAGE_CUSTOMER_MISSING", table=stats.name, pk=pk,
+                           reason="USER_NOT_IMPORTED_CUSTOMER" if cust else "NO_OWNER_COLUMN",
                            data={"decision": cust["decision"] if cust else "NO_OWNER_COLUMN"},
                            message="مصرف‌کننده کد مشتری معتبری نیست؛ سابقه فقط آرشیو شد.")
         keys.finish("engagement")
@@ -381,11 +482,12 @@ def _usage_totals(ctx: ModuleContext, out: dict[str, Any]) -> None:
     if not out["usage_totals_match"] and (log_rows or out["used_counter_sum"]):
         ctx.review(kind="engagement", code="DISCOUNT_USAGE_TOTAL_MISMATCH", entity="engagement",
                    table="Giftcodeconsumed", pk=None, severity="warning",
-                   data={"used_counter_sum": out["used_counter_sum"], "consumed_rows": log_rows},
+                   data={"used_counter_sum": out["used_counter_sum"], "consumed_rows": log_rows,
+                         "reason": "COUNTERS_VS_USAGE_LOG"},
                    message="جمع شمارنده‌های استفاده کدها با تعداد سوابق مصرف برابر نیست؛ فقط برای بررسی ثبت شد.")
 
 
-def _referrals(ctx: ModuleContext, rec_out: dict[str, Any]) -> None:
+def _referrals(ctx: ModuleContext, rec_out: dict[str, Any], budget: ReviewBudget) -> None:
     tables = ctx.tables_for("reagent_report")
     if not tables:
         return
@@ -413,15 +515,16 @@ def _referrals(ctx: ModuleContext, rec_out: dict[str, Any]) -> None:
             n += 1
             r["total"] += 1
             r["gift_paid"] += 1 if gift else 0
+            r["gift_unclaimed"] += 1 if gift is False else 0
             if missing:
                 r["party_missing"] += 1
-                ctx.review(kind="engagement", code="REFERRAL_PARTY_MISSING", entity="engagement", table=stats.name,
-                           pk=pk, severity="warning", data={"missing": missing},
+                budget.add(kind="engagement", code="REFERRAL_PARTY_MISSING", table=stats.name, pk=pk,
+                           reason="PARTY_NOT_IMPORTED_CUSTOMER", data={"missing": missing},
                            message="معرف یا زیرمجموعه در بکاپ به‌عنوان مشتری معتبر وجود ندارد؛ رابطه فقط آرشیو شد.")
             elif self_ref:
                 r["self_referral"] += 1
-                ctx.review(kind="engagement", code="REFERRAL_SELF", entity="engagement", table=stats.name, pk=pk,
-                           severity="warning", data={},
+                budget.add(kind="engagement", code="REFERRAL_SELF", table=stats.name, pk=pk,
+                           reason="REFERRER_EQUALS_REFEREE", data={},
                            message="کاربر معرف خودش ثبت شده است؛ رابطه فقط آرشیو شد.")
             else:
                 r["both_customers"] += 1
@@ -430,7 +533,7 @@ def _referrals(ctx: ModuleContext, rec_out: dict[str, Any]) -> None:
         ctx.count("engagement", "converted", n)
 
 
-def _wheel(ctx: ModuleContext, rec_out: dict[str, Any]) -> None:
+def _wheel(ctx: ModuleContext, rec_out: dict[str, Any], budget: ReviewBudget) -> None:
     tables = ctx.tables_for("wheel_list")
     if not tables:
         return
@@ -463,8 +566,8 @@ def _wheel(ctx: ModuleContext, rec_out: dict[str, Any]) -> None:
                 total += amount
             if not cust["valid"]:
                 w["customer_missing"] += 1
-                ctx.review(kind="engagement", code="WHEEL_CUSTOMER_MISSING", entity="engagement", table=stats.name,
-                           pk=pk, severity="warning", data={"decision": cust["decision"]},
+                budget.add(kind="engagement", code="WHEEL_CUSTOMER_MISSING", table=stats.name, pk=pk,
+                           reason="SPINNER_NOT_IMPORTED_CUSTOMER", data={"decision": cust["decision"]},
                            message="چرخاننده گردونه مشتری معتبری نیست؛ فقط آرشیو شد.")
         keys.finish("engagement")
         ctx.coverage(stats.name, archived=n, status="archived")
@@ -506,20 +609,93 @@ def _raw_table(ctx: ModuleContext, spec_name: str, relpath: str, record_type: st
     return total
 
 
+def _discounts_state(ctx: ModuleContext, ds: dict[str, Any]) -> None:
+    """Reconciliation ``discounts_state`` + bounded, aggregate owner-decision reviews (no code text)."""
+    complete = ds["gift_codes_value_unknown"] == 0
+    known = str(ds["outstanding_known"])
+    sec = {
+        "by_state": ds["by_state"],
+        "by_reason": dict(sorted(ds["by_reason"].items())),
+        "by_kind": {k: dict(sorted(v.items())) for k, v in sorted(ds["by_kind_state"].items())},
+        # owner-decision liability: Σ remaining uses × gift price, raw source units, never re-scaled.
+        # null when some gift code with possible remaining uses has an unreadable amount/counter.
+        "outstanding_gift_value_minor": known if complete else None,
+        "outstanding_gift_value_known_minor": known,
+        "outstanding_gift_value_complete": complete,
+        "outstanding_basis": "UPPER_BOUND_REMAINING_USES_X_PRICE (one use per customer, index.php:5763-5769)",
+        "outstanding_gift_codes": ds["obligation_codes"],
+        "outstanding_remaining_uses": ds["outstanding_remaining_uses"],
+        "gift_codes_value_unknown": ds["gift_codes_value_unknown"],
+        "currency": ctx.currency, "money_unit": ctx.money_unit,
+        "as_of": ds["as_of"], "as_of_basis": ds["as_of_basis"],
+        "issues_new_credit": False, "new_codes_created": 0, "redeemable_true": 0,
+        "decision": "owner decides per class: honour as NEW NEXA codes/credit or lapse at cutover; default lapse",
+    }
+    ctx.reconciliation("discounts_state", sec)
+    if ds["obligation_codes"]:
+        ctx.review(kind="engagement", code="GIFT_OUTSTANDING_OBLIGATION", entity="engagement", table="Discount",
+                   pk=None, severity="warning",
+                   data={"codes": ds["obligation_codes"], "remaining_uses": ds["outstanding_remaining_uses"],
+                         "reason": "UNREDEEMED_GIFT_CREDIT_OWNER_DECISION"},
+                   message="کدهای هدیه استفاده‌نشده بدهی بالقوه کیف پول هستند؛ مالک باید درباره احترام یا ابطال تصمیم بگیرد. "
+                           "هیچ اعتبار جدیدی صادر نمی‌شود.")
+    if ds["gift_codes_value_unknown"]:
+        ctx.review(kind="engagement", code="GIFT_VALUE_UNKNOWN", entity="engagement", table="Discount", pk=None,
+                   severity="warning", data={"codes": ds["gift_codes_value_unknown"],
+                                             "reason": "GIFT_COUNTERS_OR_AMOUNT_UNREADABLE"},
+                   message="برای برخی کدهای هدیه مبلغ یا شمارنده قابل خواندن نیست؛ جمع بدهی بالقوه ناقص است.")
+    active = ds["by_kind_state"].get("PURCHASE_PERCENT_CODE", {}).get(ACTIVE_UNUSED, 0)
+    if active:
+        ctx.review(kind="engagement", code="DISCOUNT_ACTIVE_CODES", entity="engagement", table="DiscountSell",
+                   pk=None, severity="warning", data={"codes": active, "reason": "REDEEMABLE_IN_MIRZA_NOT_IN_NEXA"},
+                   message="کدهای تخفیف درصدی هنوز در میرزا فعال‌اند؛ در NEXA قابل استفاده نیستند مگر مالک دوباره بسازد.")
+    unknown = ds["by_state"][UNKNOWN] - ds["gift_codes_value_unknown"]
+    if unknown:
+        ctx.review(kind="engagement", code="DISCOUNT_STATE_UNKNOWN", entity="engagement", table="DiscountSell",
+                   pk=None, severity="warning", data={"codes": unknown, "reason": "STATE_NOT_DERIVABLE_FROM_EVIDENCE"},
+                   message="وضعیت برخی کدها از شواهد قابل تعیین نیست (UNKNOWN)؛ مقدار خام حفظ شد.")
+
+
+def _referrals_wheel_state(ctx: ModuleContext, out: dict[str, Any]) -> None:
+    r, w = out["referrals"], out["wheel"]
+    ctx.reconciliation("referrals_wheel_state", {
+        "referrals": r["total"], "referrals_both_customers": r["both_customers"],
+        "referrals_party_missing": r["party_missing"], "referrals_self": r["self_referral"],
+        "start_gift_claimed": r["gift_paid"],
+        # get_gift=0: the referee may still press get_gift_start (index.php:5844-5866) while Mirza runs; the
+        # amount comes from affiliates.price_Discount at claim time, so no value is summed here
+        "start_gift_unclaimed_contingent": r["gift_unclaimed"],
+        "wheel_spins": w["spins"], "wheel_wins": w["wins"], "wheel_prize_unreadable": w["prize_unreadable"],
+        "wheel_customer_missing": w["customer_missing"],
+        "wheel_prizes_total_minor": w.get("prizes_total", {}).get("amount_minor", "0"),
+        "wheel_prize_already_in_legacy_balance": True,  # addBalance before the row is written (index.php:6253,6269)
+        "credited_by_package": "0", "referral_attribution_imported": False,
+    })
+
+
 def run(ctx: ModuleContext) -> None:
     usage = _usage_index(ctx)  # only fork codes are staged; documented code columns are SECRET
     fork = _codes(ctx, "discount_sell", "code")
+    budget = ReviewBudget(ctx, "engagement")
+    as_of, as_of_basis = backup_as_of(ctx)
     out: dict[str, Any] = {
         "codes_by_kind": {}, "codes_by_state": {}, "duplicate_codes": 0, "used_counter_sum": 0,
         "usage_rows": 0, "usage_by_match": {}, "usage_customer_missing": 0,
-        "referrals": {"total": 0, "both_customers": 0, "party_missing": 0, "self_referral": 0, "gift_paid": 0},
+        "referrals": {"total": 0, "both_customers": 0, "party_missing": 0, "self_referral": 0, "gift_paid": 0,
+                      "gift_unclaimed": 0},
         "wheel": {"spins": 0, "wins": 0, "prize_unreadable": 0, "customer_missing": 0},
     }
-    _discounts(ctx, usage, out)
-    _usage(ctx, fork, out)
+    ds: dict[str, Any] = {"as_of": as_of, "as_of_basis": as_of_basis, "by_state": {s: 0 for s in LIFECYCLE_STATES},
+                          "by_reason": {}, "by_kind_state": {}, "outstanding_known": 0, "obligation_codes": 0,
+                          "outstanding_remaining_uses": 0, "gift_codes_value_unknown": 0}
+    _discounts(ctx, usage, out, ds, budget)
+    _usage(ctx, fork, out, budget)
     _usage_totals(ctx, out)
-    _referrals(ctx, out)
-    _wheel(ctx, out)
+    _referrals(ctx, out, budget)
+    _wheel(ctx, out, budget)
+    _discounts_state(ctx, ds)
+    _referrals_wheel_state(ctx, out)
+    budget.flush()
     out["ad_campaigns"] = _raw_table(ctx, "ad_campaign", "records/engagement/ad_campaigns.jsonl",
                                      "legacy_ad_campaign", "m2n.engagement.ad_campaign.v1", {})
     out["program_settings_rows"] = _raw_table(ctx, "affiliates", "records/engagement/program_settings.jsonl",
@@ -568,6 +744,7 @@ def _synth(out, state: SynthState) -> None:
         f"(2,{s('SYNGIFT-USED')},{s('20000')},{s('5')},{s('3')})",
         f"(3,{s('SYNGIFT-MISMATCH')},{s('10000')},{s('3')},{s('3')})",
         f"(4,{s('SYNGIFT-BAD')},{s('12.5')},NULL,NULL)",
+        f"(5,{s('SYNGIFT-ZERO')},{s('0')},{s('2')},{s('0')})",  # remaining uses, zero value → ACTIVE_UNUSED
     ])
     out.write("DROP TABLE IF EXISTS `DiscountSell`;\nCREATE TABLE `DiscountSell` (\n  `id` int(6) unsigned NOT NULL AUTO_INCREMENT,\n"
               "  `codeDiscount` varchar(1000) NOT NULL,\n  `price` varchar(200) NOT NULL,\n"
@@ -581,6 +758,12 @@ def _synth(out, state: SynthState) -> None:
         f"{s('0')},{s('all')},{s('1')})",
         f"(2,{s('SYNSELL-AGENT')},{s('25')},{s('5')},{s('n')},{s('1')},{s('1')},{s('p001')},{s('syn-a')},"
         f"{s('1900000000')},{s('extend')},{s('0')})",
+        # expired before the backup's newest sale (time() >= time, index.php:1655)
+        f"(3,{s('SYNSELL-OLD')},{s('15')},{s('10')},{s('allusers')},{s('0')},{s('1')},{s('all')},{s('/all')},"
+        f"{s('1600000000')},{s('all')},{s('0')})",
+        # limit 0: refused by limitDiscount <= usedDiscount (index.php:1663) → USED
+        f"(4,{s('SYNSELL-ZERO')},{s('5')},{s('0')},{s('allusers')},{s('0')},{s('1')},{s('all')},{s('/all')},"
+        f"{s('0')},{s('all')},{s('0')})",
     ])
     out.write("DROP TABLE IF EXISTS `Giftcodeconsumed`;\nCREATE TABLE `Giftcodeconsumed` (\n"
               "  `id` int(6) unsigned NOT NULL AUTO_INCREMENT,\n  `code` varchar(2000) DEFAULT NULL,\n"

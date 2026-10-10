@@ -6,7 +6,8 @@ from ..catalogue import CATALOGUE, FINANCIAL, OPERATIONAL, PERSONAL, PUBLIC, SEC
 from ..mapping import rules
 
 _SENS = {
-    "user": {"Balance": FINANCIAL, "username": PERSONAL, "number": PERSONAL, "affiliates": PERSONAL},
+    "user": {"Balance": FINANCIAL, "username": PERSONAL, "number": PERSONAL, "affiliates": PERSONAL,
+             "maxbuyagent": FINANCIAL},
     "invoice": {"price_product": FINANCIAL, "username": PERSONAL, "id_user": PERSONAL, "note": PERSONAL,
                 "refral": PERSONAL},
     "product": {"price_product": FINANCIAL},
