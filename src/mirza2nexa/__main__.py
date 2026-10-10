@@ -25,6 +25,16 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+def _utf8_console() -> None:
+    """Windows consoles/pipes default to a legacy code page (e.g. cp1252) that cannot encode
+    Persian text; printing the banner must never crash the app."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def serve(port: int | None = None, open_browser: bool = True, launch_token: str | None = None) -> None:
     import uvicorn
 
@@ -47,6 +57,7 @@ def serve(port: int | None = None, open_browser: bool = True, launch_token: str 
         if open_browser:
             webbrowser.open(url)
 
+    _utf8_console()
     print("Mirza → NEXA Migration Studio")
     print(f"آدرس برنامه (فقط روی همین کامپیوتر): {url}")
     print("برای خروج این پنجره را ببندید یا Ctrl+C بزنید.")

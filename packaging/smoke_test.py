@@ -27,7 +27,9 @@ def main() -> int:
             except OSError:
                 time.sleep(1)
         else:
-            print("server did not start", file=sys.stderr)
+            proc.terminate()
+            out = proc.communicate(timeout=10)[0] or b""
+            print("server did not start; output:\n" + out.decode("utf-8", "replace"), file=sys.stderr)
             return 1
         with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/", timeout=5) as r:  # noqa: S310
             html = r.read().decode("utf-8")
