@@ -1,4 +1,5 @@
-"""Smoke test for a built executable: start it, check /api/health and the CSP-protected index, stop it.
+"""Smoke test for a built executable: run ``selfcheck`` (every converter module/table spec bundled),
+then start the server, check /api/health and the CSP-protected index, stop it.
 
 Usage: python packaging/smoke_test.py <path-to-executable>
 """
@@ -12,8 +13,26 @@ import urllib.request
 PORT = 18765
 
 
+def selfcheck(exe: str) -> bool:
+    p = subprocess.run([exe, "selfcheck"], capture_output=True, timeout=120)  # noqa: S603 - executable under test
+    out = p.stdout.decode("utf-8", "replace")
+    try:
+        status = json.loads(out.strip())
+    except json.JSONDecodeError:
+        status = None
+    if p.returncode != 0 or not isinstance(status, dict) or status.get("ok") is not True \
+            or status.get("missing_modules") or status.get("missing_tables"):
+        print(f"selfcheck failed (exit {p.returncode}):\n{out}\n{p.stderr.decode('utf-8', 'replace')}", file=sys.stderr)
+        return False
+    print(f"selfcheck OK: version {status.get('version')}, {status.get('specs')} specs, "
+          f"{len(status.get('modules') or [])} modules")
+    return True
+
+
 def main() -> int:
     exe = sys.argv[1]
+    if not selfcheck(exe):
+        return 1
     proc = subprocess.Popen([exe, "--port", str(PORT), "--no-browser"], stdout=subprocess.PIPE,  # noqa: S603 - path of the executable under test
                             stderr=subprocess.STDOUT)
     try:
