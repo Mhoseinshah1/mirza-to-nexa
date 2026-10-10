@@ -296,6 +296,16 @@ def _convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
     }
     writer.write_json("reports/reconciliation.json", outcome.reconciliation)
     writer.write_json("reports/coverage.json", {"tables": outcome.coverage})
+    # Review taxonomy + migration readiness (aggregates only, no PII); also written next to the
+    # package so the UI and the operator can read them without decrypting anything.
+    from . import readiness as _readiness
+    from .review_taxonomy import summarise_file
+
+    taxonomy = summarise_file(stage_dir / "reports" / "review-queue.jsonl")
+    report["review_summary"] = taxonomy
+    readiness_doc = _readiness.build(report, taxonomy, package_contract_version=PACKAGE_SCHEMA_VERSION)
+    writer.write_json("reports/review-taxonomy.json", taxonomy)
+    writer.write_json("reports/migration-readiness.json", readiness_doc)
     writer.write_json("reports/mapping.json", {"mapping_version": MAPPING_VERSION, "entities": outcome.mapping,
                                                 "schema_profile": profile.to_dict()})
     if diff is not None:
@@ -339,6 +349,9 @@ def _convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
     report["elapsed_seconds"] = round(time.time() - started, 2)
     report_path = out_dir / "report.json"
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
+    readiness_doc["generated_at"] = manifest["created_at"]
+    (out_dir / "migration-readiness.json").write_text(json.dumps(readiness_doc, ensure_ascii=False, indent=1),
+                                                      encoding="utf-8")
     db_path.unlink(missing_ok=True)
     return ConvertResult(pkg_path, key_text, report, report_path, stage_dir)
 
