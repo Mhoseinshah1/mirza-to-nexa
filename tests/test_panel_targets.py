@@ -55,7 +55,7 @@ def test_identifiers_match_the_nexa_source():
 
 
 def _records(stage: Path) -> dict[str, bytes]:
-    return {str(p.relative_to(stage)): p.read_bytes() for p in sorted((stage / "records").rglob("*.jsonl"))}
+    return {p.relative_to(stage).as_posix(): p.read_bytes() for p in sorted((stage / "records").rglob("*.jsonl"))}
 
 
 @pytest.fixture(scope="module")
