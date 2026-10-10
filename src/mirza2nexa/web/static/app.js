@@ -1605,7 +1605,7 @@
       ['positive_balances', fin.positive_balances === undefined ? undefined : fmtNum(pos.count) + ' حساب — ' + moneyText(pos.amount_minor, pos.currency)],
       ['debts', fin.debts && typeof fin.debts === 'object' && ('count' in fin.debts || 'amount_minor' in fin.debts)
         ? fmtNum(fin.debts.count) + ' حساب — ' + moneyText(fin.debts.amount_minor, fin.debts.currency) : undefined],
-      ['net_minor', fin.net_minor === undefined ? undefined : moneyText(fin.net_minor, pos.currency)],
+      ['net_minor', fin.net_minor == null ? undefined : moneyText(fin.net_minor, pos.currency)],
       ['independent_recount_matches', 'independent_recount_matches' in fin ? yesNo(fin.independent_recount_matches) : undefined],
       ['payments_unknown_status', numOrUndef(fin.payments_unknown_status)],
       ['cases_needing_review', numOrUndef(fin.cases_needing_review)],
@@ -1656,7 +1656,7 @@
     if (rv.owner_decisions_needed === undefined && r.owner_decisions_needed !== undefined) rv.owner_decisions_needed = r.owner_decisions_needed;
     const stats = $('readiness-review-stats');
     clear(stats);
-    for (const k of ['total_items', 'distinct_records', 'auto_resolved_with_evidence', 'resolvable_by_code', 'archive_only',
+    for (const k of ['total_items', 'distinct_records', 'blocker_items', 'auto_resolved_with_evidence', 'resolvable_by_code', 'archive_only',
       'owner_decision_items', 'owner_decisions_needed', 'adoption_stage']) {
       if (rv[k] === undefined || (rv[k] && typeof rv[k] === 'object')) continue;
       stats.append(el('div', { class: 'card stat', 'data-testid': 'readiness-stat-' + k },

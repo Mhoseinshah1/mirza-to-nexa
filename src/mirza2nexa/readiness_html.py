@@ -228,7 +228,7 @@ def render_readiness_html(readiness: dict[str, Any]) -> str:
     a("<h2>موارد بررسی</h2>")
     a('<div class="cards">' + "".join(
         f'<div class="card">{_e(READINESS_KEY_FA.get(k, k))}<b class="num">{_e(_num(rv.get(k)))}</b></div>'
-        for k in ("total_items", "distinct_records", "auto_resolved_with_evidence", "resolvable_by_code",
+        for k in ("total_items", "distinct_records", "blocker_items", "auto_resolved_with_evidence", "resolvable_by_code",
                   "archive_only", "owner_decision_items", "owner_decisions_needed", "adoption_stage")
         if rv.get(k) is not None and not isinstance(rv.get(k), (dict, list))) + "</div>")
     groups = _l(rv.get("by_group"))

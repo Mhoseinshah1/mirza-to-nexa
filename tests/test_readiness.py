@@ -78,3 +78,31 @@ def test_taxonomy_unit():
     assert s["codes_without_explicit_rule"] == {"TOTALLY_NEW_CODE": 1}
     assert set(GROUPS_FA) >= {g["group"] for g in s["by_group"]}
     assert set(s["by_actionability"]) == set(ACTIONABILITY)
+
+
+def test_review_blockers_and_wallet_mismatch_block_the_verdict():
+    from mirza2nexa.readiness import build
+
+    tax = summarise([{"code": "SERVICE_OWNER_CONFLICT", "severity": "blocker",
+                      "source_ref": {"table": "invoice", "pk": "a"}}])
+    report = {"readiness": "ready", "catalogue": {"ok": True},
+              "reconciliation": {"wallet": {"opening_credits": {"amount_minor": "100"},
+                                            "legacy_debts": {"amount_minor": "30"}},
+                                 "wallet_differences": {"total": 1, "by_certainty": {"UNEXPLAINED": 1}}}}
+    rd = build(report, tax, package_contract_version="1.2.0")
+    assert rd["review"]["blocker_items"] == 1
+    assert {"REVIEW_BLOCKERS_OPEN", "OWNER_DECISIONS_PENDING"} <= {b["code"] for b in rd["import_blockers"]}
+    assert next(d for d in rd["owner_decisions"] if d["id"] == "OD-WALLET-DIFFERENCES")["blocking"] is True
+    assert rd["financial"]["net_minor"] == "70"
+
+
+def test_malformed_amount_is_reported_not_zeroed():
+    from mirza2nexa.readiness import build
+
+    report = {"readiness": "ready", "catalogue": {"ok": True},
+              "reconciliation": {"wallet": {"opening_credits": {"amount_minor": "12.5"},
+                                            "legacy_debts": {"amount_minor": "0"}}}}
+    rd = build(report, summarise([]), package_contract_version="1.2.0")
+    assert rd["financial"]["net_minor"] is None and rd["financial"]["amounts_valid"] is False
+    assert any(b["code"] == "AMOUNT_UNREADABLE" for b in rd["import_blockers"])
+    assert rd["verdict"]["code"] != "READY_FOR_IMPORTER_DRY_RUN"

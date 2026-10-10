@@ -27,6 +27,19 @@ def _int(v: Any) -> int:
         return 0
 
 
+def _amount(v: Any) -> int | None:
+    """Strict integer minor amount; ``None`` (reported, never silently 0) when malformed."""
+    if v is None:
+        return 0
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, str) and v.strip().lstrip("-").isdigit():
+        return int(v)
+    return None
+
+
 def build(report: dict[str, Any], taxonomy: dict[str, Any], *, package_contract_version: str) -> dict[str, Any]:
     wallet = _sec(report, "wallet")
     diffs = _sec(report, "wallet_differences")
@@ -92,9 +105,10 @@ def build(report: dict[str, Any], taxonomy: dict[str, Any], *, package_contract_
                f"{ownership['needs_manual_review']} سرویس مالک قطعی ندارند و خودکار به کسی واگذار نمی‌شوند.")
     unexplained = _int(by_cert.get("UNEXPLAINED")) + _int(by_cert.get("PROBABLE"))
     if unexplained:
+        # an UNEXPLAINED ledger mismatch is a blocking validation issue (CLAUDE.md); PROBABLE needs confirmation
         decide("OD-WALLET-DIFFERENCES", "اختلاف تاریخچه کیف پول با موجودی",
                f"{unexplained} مورد اختلاف بدون اثبات کامل؛ موجودی بکاپ مبنای افتتاحیه می‌ماند مگر تصمیم دیگری گرفته شود.",
-               blocking=False)
+               blocking=_int(by_cert.get("UNEXPLAINED")) > 0)
     if _int(agents.get("agents")):
         decide("OD-RESELLERS", "نقش نمایندگان در NEXA",
                f"{_int(agents.get('agents'))} نماینده فقط به‌عنوان مشتری عادی منتقل می‌شوند مگر نقش نمایندگی تأیید شود.")
@@ -116,6 +130,11 @@ def build(report: dict[str, Any], taxonomy: dict[str, Any], *, package_contract_
                f"{len(review_tables)} جدول دارای داده فقط آرشیو شده‌اند و معنای آن‌ها باید تأیید شود.", blocking=False)
 
     blocking_decisions = sum(1 for d in decisions if d["blocking"])
+    review_blocker_items = sum(_int((g.get("severity") or {}).get("blocker")) for g in taxonomy.get("by_group", []))
+
+    credits_minor = _amount((wallet.get("opening_credits") or {}).get("amount_minor"))
+    debts_minor = _amount((wallet.get("legacy_debts") or {}).get("amount_minor"))
+    amounts_valid = credits_minor is not None and debts_minor is not None
 
     # ---- import blockers & verdict --------------------------------------------------------
     blockers = report.get("blockers") or []
@@ -127,12 +146,18 @@ def build(report: dict[str, Any], taxonomy: dict[str, Any], *, package_contract_
     if blocking_decisions:
         import_blockers.append({"code": "OWNER_DECISIONS_PENDING",
                                 "message_fa": f"{blocking_decisions} تصمیم مسدودکننده مالک هنوز گرفته نشده است."})
+    if review_blocker_items:
+        import_blockers.append({"code": "REVIEW_BLOCKERS_OPEN",
+                                "message_fa": f"{review_blocker_items} مورد بررسی با شدت «مسدودکننده» هنوز تعیین تکلیف نشده است."})
+    if not amounts_valid:
+        import_blockers.append({"code": "AMOUNT_UNREADABLE",
+                                "message_fa": "جمع مبالغ کیف پول در گزارش قابل خواندن نیست؛ مانده خالص محاسبه نشد."})
     if not (report.get("catalogue") or {}).get("ok", True):
         import_blockers.append({"code": "CATALOGUE_INCOMPLETE", "message_fa": "کاتالوگ جدول‌ها ناقص است."})
 
     if report.get("readiness") != "ready":
         verdict = {"code": "BLOCKED", "label_fa": "مسدود — بسته باید اصلاح شود"}
-    elif blocking_decisions:
+    elif blocking_decisions or review_blocker_items or not amounts_valid:
         verdict = {"code": "NOT_READY_FOR_IMPORT",
                    "label_fa": "بسته برای بررسی Importer آماده است، اما برای Import عملیاتی آماده نیست"}
     else:
@@ -160,8 +185,8 @@ def build(report: dict[str, Any], taxonomy: dict[str, Any], *, package_contract_
             "source_recount_matches": bool((wallet.get("source_recount") or {}).get("matches")),
             "positive_balances": {**(wallet.get("opening_credits") or {}), "currency": wallet.get("currency")},
             "debts": {**(wallet.get("legacy_debts") or {}), "currency": wallet.get("currency")},
-            "net_minor": str(_int((wallet.get("opening_credits") or {}).get("amount_minor"))
-                             - _int((wallet.get("legacy_debts") or {}).get("amount_minor"))),
+            "net_minor": str(credits_minor - debts_minor) if amounts_valid else None,
+            "amounts_valid": amounts_valid,
             "money_unit": {"value": money.get("value"), "confirmed_by": money.get("source"),
                            "proven_by_data": False},
             "history_differences": {"total": hist_total, "by_cause": diffs.get("by_cause") or {},
@@ -179,8 +204,10 @@ def build(report: dict[str, Any], taxonomy: dict[str, Any], *, package_contract_
             "total_items": taxonomy.get("total_items", 0),
             "distinct_records": taxonomy.get("distinct_records", 0),
             "by_group": [{k: g[k] for k in ("group", "label_fa", "items", "records", "items_per_record",
-                                            "resolvable_by_code", "archive_only", "owner_decision", "adoption_time")}
+                                            "resolvable_by_code", "archive_only", "owner_decision", "adoption_time",
+                                            "severity") if k in g}
                          for g in taxonomy.get("by_group", [])],
+            "blocker_items": review_blocker_items,
             "auto_resolved_with_evidence": ownership["confirmed_transfers"] + _int(by_cert.get("PROVEN")),
             "resolvable_by_code": _int(by_act.get("RESOLVABLE_BY_CODE")),
             "archive_only": _int(by_act.get("ARCHIVE_ONLY")),

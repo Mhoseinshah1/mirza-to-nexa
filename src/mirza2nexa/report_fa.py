@@ -427,6 +427,7 @@ READINESS_KEY_FA: dict[str, str] = {
     "owner_decision": "تصمیم مالک",
     "adoption_time": "هنگام Adoption",
     "auto_resolved_with_evidence": "حل خودکار با شواهد",
+    "blocker_items": "موارد مسدودکننده",
     "owner_decisions_needed": "تصمیم‌های لازم مالک",
     "adoption_stage": "موکول به مرحله Adoption",
     "count": "تعداد",
@@ -544,6 +545,8 @@ IMPORT_BLOCKER_FA: dict[str, str] = {
     "PACKAGE_BLOCKED": "بسته مسدود است",
     "OWNER_DECISIONS_PENDING": "تصمیم‌های مالک در انتظار",
     "CATALOGUE_INCOMPLETE": "فهرست جدول‌ها ناقص",
+    "REVIEW_BLOCKERS_OPEN": "موارد بررسی مسدودکننده باز",
+    "AMOUNT_UNREADABLE": "مبلغ نامعتبر در گزارش",
 }
 
 REVIEW_ACTIONABILITY_FA: dict[str, str] = {
