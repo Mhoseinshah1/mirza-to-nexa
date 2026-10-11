@@ -19,6 +19,20 @@ The rules:
 * A **major** bump changes or removes something; readers reject an unknown major version.
 * Each record schema is versioned on its own (`schema: "<name>.v<N>"`).
 
+## How NEXA consumes the package (converter 0.7.0)
+
+The converter calls its output «فایل بکاپ NEXA برای بازیابی از میرزا» and names it
+`nexa-restore-mirza-<import_id[:12]>.nxpkg`, with the key beside it as `nexa-restore-mirza-<import_id[:12]>.nxkey`
+(the content and the container are unchanged; a reader must not depend on the file name). In NEXA it is
+restored from the Web Admin «بکاپ و بازیابی ← عملیات بازیابی» as a second restore source: the operator chooses
+the file, presses «بررسی» and gives the key file or passphrase; NEXA verifies the package and shows the panel
+mapping, ownership and dry-run counts before anything is written; «تأیید بازیابی» then takes a protective backup,
+freezes writes, imports through the existing nxpkg migration engine, reconciles and takes a backup. It is not a
+`.nxb`: a `.nxb` is encrypted under the installation's own key and replaces the whole database. That restore path
+is in nexa-bot draft PR #278 — **under review, not released** — so for now only a test installation restores a
+package, and `reports/migration-readiness.json` (readiness 1.1.0) keeps the import blocker
+`NEXA_RESTORE_PATH_UNRELEASED` (it replaced `IMPORTER_NOT_BUILT`).
+
 ## Fields every record has
 
 | Field | Meaning |

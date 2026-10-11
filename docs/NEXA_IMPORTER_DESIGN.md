@@ -19,6 +19,13 @@
 > `nexa-bot` [`docs/legacy-migration/nxpkg-importer.md`](https://github.com/Mhoseinshah1/nexa-bot/blob/main/docs/legacy-migration/nxpkg-importer.md);
 > where it differs from this design, that document governs the NEXA implementation.
 
+> **How the operator runs it (converter 0.7.0).** The package (`nexa-restore-mirza-<id12>.nxpkg` + `.nxkey`) is
+> restored from NEXA's Web Admin «بکاپ و بازیابی ← عملیات بازیابی»: choose file → «بررسی» (key file or passphrase;
+> package checks, panel mapping, ownership, dry-run counts, nothing written) → «تأیید بازیابی» (protective backup,
+> write freeze, import by the `recovery` process role through the nxpkg migration engine, reconciliation, backup).
+> This path is in nexa-bot draft PR #278, which is under review and unreleased; until it is released only a test
+> installation restores a package. See `PACKAGE_CONTRACT.md` §"How NEXA consumes the package".
+
 ## 0. Principles (each one is tested in §15)
 
 1. **Fail closed.** Anything the importer does not understand (unknown major version, unknown `record_type`,
