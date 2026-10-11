@@ -114,7 +114,7 @@ def test_fresh_processes_are_repeatable_and_cover_phase2_tables(tmp_path):
         results.append(json.loads((out / "report.json").read_text(encoding="utf-8")))
         # the CLI must keep the (PII-free) readiness report next to the package
         rd = json.loads((out / "migration-readiness.json").read_text(encoding="utf-8"))
-        assert any(b["code"] == "IMPORTER_NOT_BUILT" for b in rd["import_blockers"])
+        assert any(b["code"] == "NEXA_RESTORE_PATH_UNRELEASED" for b in rd["import_blockers"])
         assert "<html" in (out / "migration-readiness.html").read_text(encoding="utf-8").lower()
     first = _logical(results[0])
     for r in results[1:]:

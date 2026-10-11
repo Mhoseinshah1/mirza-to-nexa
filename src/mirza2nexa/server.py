@@ -397,7 +397,7 @@ def create_app(manager: JobManager, *, port: int, launch_token: str) -> FastAPI:
             return _err(404, "package.not_ready", "بسته خروجی هنوز آماده نیست.")
         short = (job.summary or {}).get("import_id", job.id)[:12]
         return FileResponse(job.package_path, media_type="application/octet-stream",
-                            filename=f"nexa-migration-{short}.nxpkg")
+                            filename=f"nexa-restore-mirza-{short}.nxpkg")
 
     @app.get("/api/jobs/{job_id}/key")
     async def key(job_id: str) -> Response:
@@ -408,7 +408,7 @@ def create_app(manager: JobManager, *, port: int, launch_token: str) -> FastAPI:
             return _err(404, "package.no_key", "کلید تولیدشده‌ای برای این عملیات وجود ندارد.")
         short = (job.summary or {}).get("import_id", job.id)[:12]
         return Response(job.key_text + "\n", media_type="text/plain; charset=utf-8",
-                        headers={"Content-Disposition": f'attachment; filename="nexa-migration-{short}.nxkey"'})
+                        headers={"Content-Disposition": f'attachment; filename="nexa-restore-mirza-{short}.nxkey"'})
 
     @app.get("/api/jobs/{job_id}/report/download")
     async def report_download(job_id: str) -> Response:
@@ -464,7 +464,7 @@ def create_app(manager: JobManager, *, port: int, launch_token: str) -> FastAPI:
             "package_bytes": job.package_path.stat().st_size,
             "readiness": manifest.get("readiness"),
             "blockers": report.get("blockers") or [{"code": c} for c in manifest.get("blockers") or []],
-            "importer_built": False,
+            "nexa_restore_released": False,
             "verified_by_importer": bool((manifest.get("compatibility") or {}).get("verified_by_importer")),
         })
 

@@ -375,7 +375,7 @@ def _convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
                           "verified_by_importer": False},
         "record_counts": {k: v.get("converted", 0) for k, v in sorted(outcome.counts.items())},
     }
-    pkg_path = out_dir / f"nexa-migration-{import_id[:12]}.nxpkg"
+    pkg_path = out_dir / f"nexa-restore-mirza-{import_id[:12]}.nxpkg"
     result = writer.finalize(pkg_path, manifest=manifest, cancel=cancel, progress=progress, kdf_n=opts.kdf_n,
                              **secret)
     secret.clear()

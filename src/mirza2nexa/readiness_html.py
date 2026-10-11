@@ -21,8 +21,8 @@ from .report_fa import (
     COVERAGE_STATUS_FA,
     HISTORY_CAUSE_FA,
     IMPORT_BLOCKER_FA,
-    IMPORTER_WARNING_FA,
     MONEY_UNIT_FA,
+    NEXA_RESTORE_NOTE_FA,
     OWNERSHIP_DECISION_FA,
     PACKAGE_READINESS_FA,
     PANEL_STATUS_FA,
@@ -272,9 +272,9 @@ def render_readiness_html(readiness: dict[str, Any]) -> str:
 
     # import blockers
     ib = _l(r.get("import_blockers"))
-    a(f"<h2>موانع Import ({_e(_num(len(ib)))})</h2>")
-    a(_coded_list(ib, empty="مانعی ثبت نشده است (Importer همچنان ساخته نشده است).", labels=IMPORT_BLOCKER_FA))
+    a(f"<h2>موانع بازیابی ({_e(_num(len(ib)))})</h2>")
+    a(_coded_list(ib, empty="مانعی ثبت نشده است.", labels=IMPORT_BLOCKER_FA))
 
-    a(f'<div class="box warn">{_e(IMPORTER_WARNING_FA)}</div>')
+    a(f'<div class="box warn">{_e(NEXA_RESTORE_NOTE_FA)}</div>')
     a("</main></body></html>")
     return "".join(parts)

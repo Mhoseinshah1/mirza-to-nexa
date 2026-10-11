@@ -26,8 +26,11 @@ def test_readiness_sections_and_verdict(converted):
                 "owner_decisions", "import_blockers"):
         assert key in rd, key
     assert rd["verdict"]["code"] in {"NOT_READY_FOR_IMPORT", "READY_FOR_IMPORTER_DRY_RUN", "BLOCKED"}
-    # 'ready' is never an import permission while the NEXA importer does not exist
-    assert any(b["code"] == "IMPORTER_NOT_BUILT" for b in rd["import_blockers"])
+    # 'ready' is never a production restore permission while NEXA's restore path is unreleased
+    assert rd["import_blockers"][0]["code"] == "NEXA_RESTORE_PATH_UNRELEASED"
+    assert "عملیات بازیابی" in rd["import_blockers"][0]["message_fa"]
+    assert not any(b["code"] == "IMPORTER_NOT_BUILT" for b in rd["import_blockers"])
+    assert rd["readiness_version"] == "1.1.0"
     assert rd["package_health"]["readiness"] == res.report["readiness"]
     assert rd["financial"]["balanced"] is True
     assert rd["coverage"]["tables_total"] == len(res.report["coverage"])

@@ -49,7 +49,7 @@
         <li><button type="button" class="nav-item" data-view="coverage" data-testid="nav-coverage"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h18v4H3zm0 7h8v11H3zm10 0h8v4h-8zm0 7h8v4h-8z"/></svg><span>پوشش جدول‌ها</span></button></li>
         <li><button type="button" class="nav-item" data-view="review" data-testid="nav-review"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v2H3zm0 6h12v2H3zm0 6h18v2H3z"/></svg><span>صف بررسی</span></button></li>
         <li><button type="button" class="nav-item" data-view="preview" data-testid="nav-preview"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5C6 5 2 12 2 12s4 7 10 7 10-7 10-7-4-7-10-7zm0 11a4 4 0 1 1 0-8 4 4 0 0 1 0 8z"/></svg><span>پیش‌نمایش خروجی</span></button></li>
-        <li><button type="button" class="nav-item" data-view="download" data-testid="nav-download"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3h2v10l3.5-3.5 1.4 1.4L12 16.8l-5.9-5.9 1.4-1.4L11 13zM4 19h16v2H4z"/></svg><span>دانلود بسته</span></button></li>
+        <li><button type="button" class="nav-item" data-view="download" data-testid="nav-download"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3h2v10l3.5-3.5 1.4 1.4L12 16.8l-5.9-5.9 1.4-1.4L11 13zM4 19h16v2H4z"/></svg><span>دانلود فایل بکاپ</span></button></li>
         <li><button type="button" class="nav-item" data-view="history" data-testid="nav-history"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3a9 9 0 0 0-9 9H1l4 4 4-4H6a7 7 0 1 1 2 4.9l-1.4 1.4A9 9 0 1 0 13 3zm-1 5v5l4.3 2.5.7-1.2-3.5-2.1V8z"/></svg><span>تاریخچه</span></button></li>
         <li><button type="button" class="nav-item" data-view="settings" data-testid="nav-settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 4 5v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V5zm-1 14-4-4 1.4-1.4L11 13.2l5.6-5.6L18 9z"/></svg><span>امنیت و منابع</span></button></li>
       </ul>
@@ -81,7 +81,7 @@
       <header class="view-head">
         <div>
           <h1 id="h-dashboard">داشبورد</h1>
-          <p class="muted">تبدیل امن بکاپ SQL ربات میرزا به بسته مهاجرت NEXA — کاملاً آفلاین.</p>
+          <p class="muted">تبدیل امن بکاپ SQL ربات میرزا به «فایل بکاپ NEXA برای بازیابی از میرزا» — کاملاً آفلاین.</p>
         </div>
         <button type="button" class="btn btn-primary btn-lg" id="quick-start" data-testid="quick-start">شروع تبدیل بکاپ جدید</button>
       </header>
@@ -294,7 +294,7 @@
           <button type="button" class="btn btn-danger" id="cancel-btn" data-testid="cancel-btn" hidden>لغو عملیات</button>
           <button type="button" class="btn btn-primary" id="retry-btn" data-testid="retry-btn" hidden>تنظیم دوباره و تلاش مجدد</button>
           <button type="button" class="btn btn-primary" id="goto-report" hidden>مشاهده گزارش</button>
-          <button type="button" class="btn btn-secondary" id="goto-download" hidden>دانلود بسته</button>
+          <button type="button" class="btn btn-secondary" id="goto-download" hidden>دانلود فایل بکاپ</button>
         </div>
       </div>
     </section>
@@ -318,9 +318,9 @@
           <h2>شناسه‌ها و واحد پول</h2>
           <dl class="kv-grid" id="report-meta"></dl>
         </div>
-        <div class="card importer-warning" data-testid="report-importer-warning" role="note">
-          <strong>Importer نکسا هنوز ساخته نشده است.</strong>
-          <span>این بسته یک قرارداد پیشنهادی است و قابلیت ورود آن به NEXA تأیید نشده است.</span>
+        <div class="card restore-note" data-testid="report-restore-note" role="note">
+          <strong>خروجی: «فایل بکاپ NEXA برای بازیابی از میرزا»</strong>
+          <span>در پنل مدیریت NEXA از «بکاپ و بازیابی ← عملیات بازیابی» همراه با کلیدش بازیابی می‌شود؛ NEXA پیش از نوشتن هر داده‌ای آن را بررسی می‌کند و بکاپ محافظ می‌گیرد. این مسیر در نسخه‌ای از NEXA است که هنوز در حال بررسی است و منتشر نشده؛ فعلاً فقط روی نصب آزمایشی.</span>
         </div>
         <div class="stat-grid" id="history-cards" data-testid="history-cards" hidden></div>
         <h2 class="section-title">تعداد رکوردها</h2>
@@ -379,8 +379,8 @@
       <div id="readiness-body" hidden>
         <div class="readiness" id="readiness-verdict" data-testid="readiness-verdict" role="status"></div>
         <div class="card importer-warning" data-testid="readiness-disclaimer" role="note">
-          <strong>«آماده» به معنی مجوز Import نیست.</strong>
-          <span>این نتیجه فقط می‌گوید بسته برای اجرای آزمایشی (Dry-run) یک Importer آینده مناسب است یا نه. Importer نکسا هنوز ساخته نشده و هیچ داده‌ای وارد NEXA نشده است.</span>
+          <strong>«آماده» به معنی مجوز بازیابی روی سرور اصلی نیست.</strong>
+          <span>این نتیجه فقط می‌گوید فایل از نظر مبدل برای بازیابی روی یک نصب آزمایشی NEXA مناسب است یا نه؛ تصمیم نهایی با مرحله «بررسی» خود NEXA است. مسیر بازیابی از میرزا در نسخه‌ای از NEXA است که هنوز منتشر نشده، و این برنامه هیچ داده‌ای وارد NEXA نکرده است.</span>
         </div>
         <div class="card">
           <h2>مشخصات</h2>
@@ -414,7 +414,7 @@
             <p class="muted small">مبدل هرگز به پنل‌ها وصل نمی‌شود و هیچ سرویسی را ایجاد، تمدید یا حذف نمی‌کند.</p>
           </div>
           <div class="card" id="readiness-import-blockers" data-testid="readiness-import-blockers">
-            <h2>موانع Import <span class="pill pill-bad num" id="readiness-import-blocker-count">۰</span></h2>
+            <h2>موانع بازیابی <span class="pill pill-bad num" id="readiness-import-blocker-count">۰</span></h2>
             <ul class="issue-list" id="readiness-import-blocker-list"></ul>
           </div>
         </div>
@@ -731,8 +731,8 @@
     <section class="view" id="view-download" data-view-name="download" aria-labelledby="h-download" hidden>
       <header class="view-head">
         <div>
-          <h1 id="h-download">دانلود بسته</h1>
-          <p class="muted">بسته مهاجرت NEXA (‎.nxpkg‎) و کلید آن.</p>
+          <h1 id="h-download">دانلود فایل بکاپ NEXA</h1>
+          <p class="muted">«فایل بکاپ NEXA برای بازیابی از میرزا» (‎.nxpkg‎) و کلید آن (‎.nxkey‎).</p>
         </div>
       </header>
       <div class="empty card" id="download-empty">بسته پس از کامل شدن تبدیل آماده می‌شود.</div>
@@ -748,10 +748,6 @@
             <h2>پیش‌نمایش کامل بسته</h2>
             <span class="contract-version">نسخه قرارداد بسته: <bdi dir="ltr" class="mono" id="contract-version" data-testid="contract-version">—</bdi></span>
           </div>
-          <div class="importer-warning" id="importer-warning" data-testid="importer-warning" role="alert">
-            <strong>هشدار: Importer نکسا هنوز ساخته نشده است.</strong>
-            <span>قالب این بسته یک قرارداد پیشنهادی است و قابلیت ورود (Import) آن به NEXA تأیید نشده است. از این بسته در سرور اصلی استفاده نکنید.</span>
-          </div>
           <dl class="kv-grid" id="package-preview-meta"></dl>
           <div id="package-preview-blockers"></div>
           <h3 class="small">فایل‌های داخل بسته</h3>
@@ -762,13 +758,24 @@
             </table>
           </div>
         </div>
+        <div class="card restore-steps" id="restore-steps" data-testid="restore-steps" role="note">
+          <h2>بازیابی در NEXA</h2>
+          <ol class="steps-list">
+            <li>فایل بکاپ (‎.nxpkg‎) و کلید آن (‎.nxkey‎) را از همین صفحه دانلود کنید و کلید را جدا از فایل نگه دارید.</li>
+            <li>در پنل مدیریت NEXA به «بکاپ و بازیابی ← عملیات بازیابی» بروید.</li>
+            <li>فایل ‎.nxpkg‎ را انتخاب کنید.</li>
+            <li>«بررسی» را بزنید و فایل کلید (یا رمز عبوری که برای بسته گذاشته‌اید) را بدهید. NEXA پیش از نوشتن هر داده‌ای فایل، نگاشت پنل‌ها، مالکیت سرویس‌ها و شمارش‌های آزمایشی را بررسی و نشان می‌دهد.</li>
+            <li>اگر نتیجه بررسی درست بود، «تأیید بازیابی» را بزنید. NEXA اول یک بکاپ محافظ می‌گیرد، نوشتن را متوقف می‌کند، داده‌ها را وارد و تطبیق می‌کند و در پایان دوباره بکاپ می‌گیرد.</li>
+            <li>نتیجه را در همان صفحه NEXA ببینید و با گزارش این برنامه مقایسه کنید.</li>
+          </ol>
+          <p class="note small" data-testid="restore-unreleased"><strong>مهم:</strong> این مسیر بازیابی در نسخه‌ای از NEXA است که هنوز در حال بررسی است و منتشر نشده. فعلاً فقط روی یک نصب آزمایشی NEXA از آن استفاده کنید، نه روی سرور اصلی.</p>
+        </div>
         <div class="card">
-          <h2>بسته مهاجرت</h2>
+          <h2>فایل بکاپ NEXA برای بازیابی از میرزا</h2>
           <dl class="kv-grid" id="package-meta"></dl>
           <div class="actions">
-            <a class="btn btn-primary btn-lg" id="download-pkg" data-testid="download-pkg" download>دانلود بسته ‎.nxpkg‎</a>
+            <a class="btn btn-primary btn-lg" id="download-pkg" data-testid="download-pkg" download>دانلود فایل بکاپ ‎.nxpkg‎</a>
           </div>
-          <p class="note small">توجه: قالب این بسته یک قرارداد پیشنهادی است و تا زمانی که Importer نکسا ساخته و آزمایش نشده، قابلیت Import آن در محیط عملیاتی تأیید نشده است. پیش از استفاده در سرور اصلی، آن را در محیط آزمایشی بررسی کنید.</p>
         </div>
         <div class="card danger-zone">
           <h2>حذف عملیات و فایل‌های موقت</h2>

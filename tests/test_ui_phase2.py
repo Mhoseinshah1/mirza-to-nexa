@@ -125,7 +125,7 @@ def test_package_preview_matches_encrypted_package(completed_job, tmp_path):
     assert p.status_code == 200, p.text
     pv = p.json()
     assert pv["package_schema_version"] == PACKAGE_SCHEMA_VERSION
-    assert pv["importer_built"] is False and pv["verified_by_importer"] is False
+    assert pv["nexa_restore_released"] is False and pv["verified_by_importer"] is False
     assert "files" not in pv["manifest"]
     assert pv["manifest"]["import_id"] == report["import_id"]
     assert pv["readiness"] == report["readiness"] == "blocked"
@@ -165,7 +165,8 @@ def test_report_html_is_escaped_attachment_without_personal_data(completed_job):
     assert "<script" not in body.lower()
     assert "<img" not in body.lower()
     assert "x&lt;img src=x&gt;" in body
-    assert "Importer نکسا هنوز ساخته نشده" in body
+    assert report_fa.NEXA_RESTORE_NOTE_FA in body and "عملیات بازیابی" in body
+    assert "ساخته نشده" not in body
     assert PACKAGE_SCHEMA_VERSION in body
     # aggregates only: no Telegram ids, usernames or raw cell values of the backup
     assert not set(re.findall(r"\d{10}", body)) & {str(TG_BASE + n) for n in range(100)}

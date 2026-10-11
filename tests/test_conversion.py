@@ -129,6 +129,7 @@ def test_package_roundtrip_and_tamper_detection(healthy, tmp_path):
     reader = PackageReader(res.package_path, key=res.key_text, workdir=tmp_path / "v")
     rep = reader.verify()
     assert rep.import_id == res.report["import_id"]
+    assert res.package_path.name == f"nexa-restore-mirza-{rep.import_id[:12]}.nxpkg"
     assert rep.manifest["readiness"] == "ready"
     assert rep.manifest["compatibility"]["verified_by_importer"] is False
     assert sum(1 for _ in reader.iter_jsonl("records/customers.jsonl")) == len(records(res, "customers"))

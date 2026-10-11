@@ -179,7 +179,7 @@
     coverage_status: { executed: 'اجرا شد', archived: 'آرشیو شد', review: 'نیازمند بررسی', blocked: 'مسدود', empty: 'بدون داده', excluded: 'غیرقابل انتقال' },
     coverage_status_help: {},
     classes: {},
-    readiness: { ready: 'آماده بررسی Importer', blocked: 'مسدود' },
+    readiness: { ready: 'آماده بازیابی آزمایشی در NEXA', blocked: 'مسدود' },
     entities: {},
     keys: {},
     key_help: {},
@@ -191,8 +191,8 @@
     entity_block_reason: {},
     mapping_status: {},
     readiness_verdicts: {
-      NOT_READY_FOR_IMPORT: 'آماده Import نیست',
-      READY_FOR_IMPORTER_DRY_RUN: 'آماده اجرای آزمایشی Importer (نه Import واقعی)',
+      NOT_READY_FOR_IMPORT: 'آماده بازیابی نیست',
+      READY_FOR_IMPORTER_DRY_RUN: 'آماده بازیابی آزمایشی در NEXA (نه سرور اصلی)',
       BLOCKED: 'مسدود',
     },
     readiness_keys: {},
@@ -1312,11 +1312,11 @@
     rd.append(
       el('span', { 'aria-hidden': 'true', text: ready ? '✓' : '⛔' }),
       el('span', null,
-        ready ? 'آماده بررسی Importer' : 'مسدود — تا رفع مغایرت‌ها قابل Import نیست',
+        ready ? 'آماده بازیابی آزمایشی در NEXA' : 'مسدود — تا رفع مغایرت‌ها قابل بازیابی نیست',
         el('span', {
           class: 'readiness-sub',
           text: ready
-            ? 'هیچ مورد مسدودکننده‌ای یافت نشد. پیش از Import، گزارش تطبیق مالی را با مدیر میرزا بررسی کنید.'
+            ? 'هیچ مورد مسدودکننده‌ای یافت نشد. پیش از بازیابی در NEXA، گزارش تطبیق مالی را با مدیر میرزا بررسی کنید.'
             : 'موارد مسدودکننده را در فهرست زیر و «صف بررسی» بررسی و در منبع اصلاح کنید، سپس دوباره تبدیل کنید.',
         })));
 
@@ -1580,7 +1580,7 @@
   }
 
   const SECTION_DEFS = [
-    ['OPERATIONAL', 'section-operational', 'عملیاتی', 'وارد بخش‌های فعال NEXA می‌شود (پس از تأیید Importer).'],
+    ['OPERATIONAL', 'section-operational', 'عملیاتی', 'با بازیابی در NEXA وارد بخش‌های فعال آن می‌شود.'],
     ['ARCHIVE', 'section-archive', 'آرشیو', 'فقط برای سابقه و جست‌وجو؛ هیچ اثری روی موجودی یا سرویس ندارد.'],
     ['REVIEW', 'section-review', 'نیازمند بررسی', 'نگه داشته شده تا مالک NEXA درباره آن تصمیم بگیرد.'],
   ];
@@ -1745,7 +1745,7 @@
       el('span', null,
         el('span', { 'data-testid': 'readiness-verdict-label', text: v.label_fa ? String(v.label_fa) : codeLabel(L.readiness_verdicts, code) }),
         code ? el('span', { class: 'key-code', text: code }) : null,
-        el('span', { class: 'readiness-sub', text: 'حتی در بهترین حالت، این نتیجه مجوز Import نیست؛ Importer نکسا هنوز ساخته نشده است.' }),
+        el('span', { class: 'readiness-sub', text: 'حتی در بهترین حالت، این نتیجه مجوز بازیابی روی سرور اصلی نیست؛ NEXA خودش پیش از هر نوشتن فایل را بررسی می‌کند و مسیر بازیابی از میرزا هنوز در نسخه منتشرنشده NEXA است.' }),
         reasons.length ? el('ul', { class: 'readiness-reasons' }, reasons.map((x) => el('li', { 'data-code': x.code === undefined ? null : String(x.code) },
           String(x.message_fa || humanise(x.code || '—')), x.code ? el('span', { class: 'key-code', text: String(x.code) }) : null))) : null));
 
@@ -1898,7 +1898,7 @@
     // import blockers
     const ib = objList(r.import_blockers);
     $('readiness-import-blocker-count').textContent = fmtNum(ib.length);
-    codedItems($('readiness-import-blocker-list'), ib, 'مانعی ثبت نشده است (Importer همچنان ساخته نشده است).', L.import_blockers);
+    codedItems($('readiness-import-blocker-list'), ib, 'مانعی ثبت نشده است.', L.import_blockers);
   }
 
   // ------------------------------------------------------------------ coverage
@@ -2181,7 +2181,7 @@
     kvGrid($('package-meta'), [
       ['فایل منبع', el('bdi', { dir: 'ltr', text: j.filename })],
       ['شناسه Import', s.import_id || undefined, 'mono'],
-      ['آمادگی', s.readiness ? (s.readiness === 'ready' ? 'آماده بررسی Importer' : 'مسدود') : undefined],
+      ['آمادگی', s.readiness ? (s.readiness === 'ready' ? 'آماده بازیابی آزمایشی در NEXA' : 'مسدود') : undefined],
       ['موارد مسدودکننده', s.blocker_count !== undefined ? fmtNum(s.blocker_count) : undefined],
       ['موارد نیازمند بررسی', s.review_count !== undefined ? fmtNum(s.review_count) : undefined],
       ['رمزنگاری بسته', j.has_key ? 'کلید تصادفی جداگانه' : 'رمز عبور اپراتور'],
@@ -2223,8 +2223,8 @@
       ['آمادگی', own(L.readiness, p.readiness) || p.readiness || '—', p.readiness === 'ready' ? 'ok-text' : 'bad-text'],
       ['نسخه نگاشت', m.mapping_version || undefined, 'mono'],
       ['مبدل', conv.name ? conv.name + ' ' + (conv.version || '') : undefined, 'mono'],
-      ['حداقل نسخه Importer', comp.min_importer_version || undefined, 'mono'],
-      ['تأییدشده توسط Importer', p.verified_by_importer ? 'بله' : 'خیر — Importer هنوز ساخته نشده', p.verified_by_importer ? '' : 'bad-text'],
+      ['حداقل نسخه بازیابی NEXA', comp.min_importer_version || undefined, 'mono'],
+      ['بررسی‌شده توسط NEXA', p.verified_by_importer ? 'بله' : 'هنوز نه — NEXA آن را در مرحله «بررسی» پیش از هر نوشتن بررسی می‌کند'],
       ['زمان ساخت', m.created_at || undefined, 'mono'],
       ['واحد اعلام‌شده', m.money ? (UNIT_FA[m.money.declared_unit] || 'تعیین‌نشده') : undefined],
       ['تعداد فایل‌ها', fmtNum(files.length)],

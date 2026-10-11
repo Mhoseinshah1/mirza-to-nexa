@@ -41,7 +41,7 @@ COVERAGE_STATUS_HELP_FA: dict[str, str] = {
     "excluded": "طبق تصمیم مستند، این جدول منتقل نمی‌شود (فقط شمارش می‌شود).",
 }
 
-READINESS_FA: dict[str, str] = {"ready": "آماده بررسی Importer", "blocked": "مسدود"}
+READINESS_FA: dict[str, str] = {"ready": "آماده بازیابی آزمایشی در NEXA", "blocked": "مسدود"}
 
 ENTITY_FA: dict[str, str] = {
     "customers": "مشتریان",
@@ -360,21 +360,25 @@ MAPPING_STATUS_FA: dict[str, str] = {
     "archived": "آرشیو", "review": "نیازمند بررسی",
 }
 
-IMPORTER_WARNING_FA = (
-    "Importer نکسا هنوز ساخته نشده است. قالب این بسته یک قرارداد پیشنهادی است و قابلیت ورود (Import) آن "
-    "به NEXA تأیید نشده است. از این بسته در سرور اصلی استفاده نکنید."
+#: What the output is and where it goes. One source for the web UI and both HTML reports.
+NEXA_RESTORE_NOTE_FA = (
+    "این فایل «فایل بکاپ NEXA برای بازیابی از میرزا» است. آن را در پنل مدیریت NEXA از «بکاپ و بازیابی ← "
+    "عملیات بازیابی» همراه با کلیدش بازیابی کنید؛ NEXA پیش از نوشتن هر داده‌ای فایل را بررسی می‌کند و یک بکاپ "
+    "محافظ می‌گیرد. این مسیر بازیابی در نسخه‌ای از NEXA است که هنوز در حال بررسی است و منتشر نشده؛ فعلاً فقط "
+    "روی یک نصب آزمایشی NEXA از آن استفاده کنید، نه روی سرور اصلی."
 )
 
 
 # ---- migration readiness (``migration-readiness.json``) ------------------------------------
 READINESS_DISCLAIMER_FA = (
-    "«آماده» فقط یعنی این بسته از نظر مبدل برای اجرای آزمایشی (Dry-run) یک Importer آینده مناسب است؛ "
-    "این به معنی مجوز Import در NEXA نیست. Importer نکسا هنوز ساخته نشده و هیچ داده‌ای وارد NEXA نشده است."
+    "«آماده» فقط یعنی این فایل از نظر مبدل برای بازیابی آزمایشی در NEXA مناسب است؛ تصمیم نهایی با «بررسی» "
+    "خود NEXA پیش از «تأیید بازیابی» است. این مجوز بازیابی روی سرور اصلی نیست: مسیر بازیابی از میرزا در "
+    "نسخه‌ای از NEXA است که هنوز منتشر نشده. این برنامه هیچ داده‌ای وارد NEXA نکرده است."
 )
 
 READINESS_VERDICT_FA: dict[str, str] = {
-    "NOT_READY_FOR_IMPORT": "آماده Import نیست",
-    "READY_FOR_IMPORTER_DRY_RUN": "آماده اجرای آزمایشی Importer (نه Import واقعی)",
+    "NOT_READY_FOR_IMPORT": "آماده بازیابی نیست",
+    "READY_FOR_IMPORTER_DRY_RUN": "آماده بازیابی آزمایشی در NEXA (نه سرور اصلی)",
     "BLOCKED": "مسدود",
 }
 
@@ -387,7 +391,7 @@ READINESS_SECTION_FA: dict[str, str] = {
     "panels": "نگاشت پنل‌ها",
     "review": "موارد بررسی",
     "owner_decisions": "تصمیم‌های لازم مالک",
-    "import_blockers": "موانع Import",
+    "import_blockers": "موانع بازیابی",
 }
 
 READINESS_KEY_FA: dict[str, str] = {
@@ -566,7 +570,7 @@ MONEY_UNIT_FA: dict[str, str] = {"toman": "تومان", "rial": "ریال", "IRT
 CONFIRMED_BY_FA: dict[str, str] = {"operator": "اپراتور", "evidence": "شواهد داخل بکاپ"}
 
 IMPORT_BLOCKER_FA: dict[str, str] = {
-    "IMPORTER_NOT_BUILT": "Importer نکسا ساخته نشده",
+    "NEXA_RESTORE_PATH_UNRELEASED": "مسیر بازیابی NEXA هنوز منتشر نشده",
     "PACKAGE_BLOCKED": "بسته مسدود است",
     "OWNER_DECISIONS_PENDING": "تصمیم‌های مالک در انتظار",
     "CATALOGUE_INCOMPLETE": "فهرست جدول‌ها ناقص",
@@ -712,7 +716,7 @@ def labels_payload() -> dict[str, Any]:
         "blocker_category": BLOCKER_CATEGORY,
         "entity_block_reason": ENTITY_BLOCK_REASON_FA,
         "mapping_status": MAPPING_STATUS_FA,
-        "importer_warning": IMPORTER_WARNING_FA,
+        "restore_note": NEXA_RESTORE_NOTE_FA,
         "readiness_disclaimer": READINESS_DISCLAIMER_FA,
         "readiness_verdicts": READINESS_VERDICT_FA,
         "readiness_sections": READINESS_SECTION_FA,
@@ -862,7 +866,7 @@ def render_report_html(report: dict[str, Any], *, manifest: dict[str, Any] | Non
       f"<style>{_CSS}</style></head><body><main>")
     a("<h1>گزارش مهاجرت میرزا به نکسا</h1>")
     a('<p class="muted small">این گزارش فقط آمار کلی را دارد و هیچ اطلاعات شخصی، شناسه مشتری، رمز یا کلید در آن نیست.</p>')
-    a(f'<div class="box bad" role="alert"><strong>هشدار:</strong> {_e(IMPORTER_WARNING_FA)}</div>')
+    a(f'<div class="box warn" role="note"><strong>بازیابی در NEXA:</strong> {_e(NEXA_RESTORE_NOTE_FA)}</div>')
     a(f'<div class="box {"ok" if ready else "bad"}"><strong>وضعیت آمادگی: '
       f'{_e(READINESS_FA.get(readiness, readiness or "—"))}</strong> <span class="code">{_e(readiness)}</span></div>')
 
@@ -978,7 +982,7 @@ def render_report_html(report: dict[str, Any], *, manifest: dict[str, Any] | Non
     else:
         a('<p class="muted">پرسش بازی ثبت نشده است.</p>')
 
-    a(f'<div class="box warn">{_e(IMPORTER_WARNING_FA)}</div>')
+    a(f'<div class="box warn">{_e(NEXA_RESTORE_NOTE_FA)}</div>')
     a("</main></body></html>")
     return "".join(parts)
 
