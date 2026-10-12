@@ -31,13 +31,16 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 from pathlib import Path
 from typing import Any
 
 from .mapping import rules
 from .sensitivity import column_name_is_secret
 from .sqldump import Column, RowEvent, TableDef, _unescape_sq_str
+
+#: Rows between free-space checks (and cancellation checks while writing).
+DISK_CHECK_EVERY = 20_000
 
 SNAPSHOT_VERSION = 1
 CATALOG_PATH = "source/catalog.json"
@@ -250,7 +253,14 @@ def cast_char(value: Any, col: Column, engine_hint: str | None = None) -> str | 
         except ValueError:
             raise Unrepresentable from None
         d = _as_decimal(value)
-        q = d.quantize(Decimal(1).scaleb(-s)) if s else d.quantize(Decimal(1))
+        # A context wide enough for DECIMAL(65,30) (MySQL's maximum): the default 28 digits would
+        # raise InvalidOperation on a valid wide value. Anything still out of range fails closed.
+        try:
+            with localcontext() as ctx:
+                ctx.prec = max(p, 1) + s + 2
+                q = d.quantize(Decimal(1).scaleb(-s)) if s else d.quantize(Decimal(1))
+        except InvalidOperation:
+            raise Unrepresentable from None
         if q != d or len(q.as_tuple().digits) > max(p, 1) or ("unsigned" in t and q < 0):
             raise Unrepresentable  # MySQL would round / refuse: not provable
         text = format(q, "f")
@@ -320,6 +330,10 @@ class SnapshotCollector:
         self.tables: dict[str, _TableState] = {}
         self.order: list[str] = []
         self.engine_hints: list[str | None] = []
+        self.engine_hint: str | None = None
+        # Called every DISK_CHECK_EVERY rows staged or written (pipeline: the free-space margin).
+        self.disk_check: Any = None
+        self._since_check = 0
         self.blockers: dict[str, int] = {}
         self.marker_seen = False
         self.marker_label: str | None = None
@@ -329,8 +343,6 @@ class SnapshotCollector:
 
     def _block(self, code: str, n: int = 1) -> None:
         self.blockers[code] = self.blockers.get(code, 0) + n
-
-        self.engine_hint: str | None = None
 
     def on_file(self, path: Path) -> None:
         """Called before each dump file is parsed: sniff its comment header for the engine."""
@@ -407,6 +419,7 @@ class SnapshotCollector:
         pend = self._pending[table]
         if not pend:
             return
+        self._checkpoint(len(pend))
         self.conn.execute("BEGIN")
         for row in pend:
             try:
@@ -415,6 +428,15 @@ class SnapshotCollector:
                 self._block(KEY_INVALID)  # duplicate primary key bytes
         self.conn.execute("COMMIT")
         pend.clear()
+
+    def _checkpoint(self, rows: int) -> None:
+        """The snapshot is a second SQLite file beside staging (and a JSONL copy at write time):
+        its growth is checked against the free-space margin as it grows, so a disk that fills
+        fails as ``DiskSpaceError`` rather than an internal SQLite error."""
+        self._since_check += rows
+        if self.disk_check is not None and self._since_check >= DISK_CHECK_EVERY:
+            self._since_check = 0
+            self.disk_check()
 
     def finish(self) -> None:
         for t in self._pending:
@@ -460,14 +482,19 @@ class SnapshotCollector:
             },
         }
 
-    def write(self, writer: Any) -> SnapshotResult:
-        """Write ``source/catalog.json`` and one ``source/tables/<t>.jsonl`` per snapshot table."""
+    def write(self, writer: Any, cancel: Any = None) -> SnapshotResult:
+        """Write ``source/catalog.json`` and one ``source/tables/<t>.jsonl`` per snapshot table.
+
+        ``cancel`` (a ``CancelToken``) is checked per table and every ``DISK_CHECK_EVERY`` rows,
+        so cancelling or deleting a job stays responsive on a large backup."""
         self.finish()
         catalog = self.catalog()
         written: dict[str, int] = {}
         for t in SNAPSHOT_TABLES:
             if t not in self._plan:
                 continue
+            if cancel is not None:
+                cancel.check()
             names = self._plan[t][0]
             with writer.open_jsonl(f"source/tables/{t}.jsonl") as j:
                 j.write({"format": TABLE_FORMAT, "table": t, "primary_key": PRIMARY_KEYS[t], "columns": list(names)})
@@ -475,6 +502,10 @@ class SnapshotCollector:
                 for (cells,) in self.conn.execute(f'SELECT cells FROM "s_{t}" ORDER BY pk'):  # noqa: S608
                     j.write({"c": json.loads(cells)})
                     n += 1
+                    if n % DISK_CHECK_EVERY == 0:
+                        if cancel is not None:
+                            cancel.check()
+                        self._checkpoint(DISK_CHECK_EVERY)
             written[t] = n
             catalog["snapshot_tables"][t]["rows"] = n
         writer.write_json(CATALOG_PATH, catalog)

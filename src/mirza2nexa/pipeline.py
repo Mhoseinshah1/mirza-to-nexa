@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from . import CONVERTER_NAME, __version__
-from .archive import ArchiveLimits, extract_sql, inspect_archive
+from .archive import ArchiveLimits, _check_disk, extract_sql, inspect_archive
 from .convert import BLOCKER_MESSAGES, MAPPING_VERSION, WARNING_MESSAGES, Converter
 from .diff import diff_records
 from .nxpkg import PackageWriter, generate_key_file
@@ -175,6 +175,7 @@ def _convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
     from .source_snapshot import SnapshotCollector
 
     snapshot = SnapshotCollector(workspace / "snapshot.sqlite")
+    snapshot.disk_check = lambda: _check_disk(workspace, 0, opts.limits.min_free_disk_margin)
     # Any failure before the snapshot is written (staging, schema detection) must release the
     # SQLite handle first: Windows cannot delete an open file during plaintext cleanup.
     try:
@@ -217,7 +218,7 @@ def _convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
         return sinks[rel]
 
     try:
-        snap = snapshot.write(writer)
+        snap = snapshot.write(writer, cancel=cancel)
     finally:
         snapshot.close()
 

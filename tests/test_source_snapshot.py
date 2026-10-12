@@ -168,7 +168,7 @@ def test_snapshot_is_deterministic_and_other_records_unchanged(converted, tmp_pa
             assert a[name] == b[name], name
     # Without the snapshot, every record file is byte-identical: the snapshot is purely additive.
     monkeypatch.setattr(ss.SnapshotCollector, "write",
-                        lambda self, writer: ss.SnapshotResult(catalog={"engine_hint": None, "tables": []},
+                        lambda self, writer, cancel=None: ss.SnapshotResult(catalog={"engine_hint": None, "tables": []},
                                                                table_files={}))
     plain = run(tmp_path, zp, ws_name="plain")
     c = files(plain.stage_dir)
@@ -327,3 +327,82 @@ def test_snapshot_handle_released_when_schema_detection_fails(tmp_path, monkeypa
         run(tmp_path, zp)
     assert states and states[0] is True
     assert not (tmp_path / "ws" / "snapshot.sqlite").exists()
+
+
+# --- Codex review on PR #3 (each test fails when its fix is reverted) --------------------------
+
+
+@pytest.mark.parametrize(("ctype", "value", "text"), [
+    ("decimal(30,2)", Decimal("1234567890123456789012345678.12"), "1234567890123456789012345678.12"),
+    ("decimal(65,0)", Decimal("9" * 65), "9" * 65),
+    ("decimal(65,30)", Decimal("1." + "0" * 29 + "1"), "1." + "0" * 29 + "1"),
+])
+def test_cast_char_wide_decimals_beyond_the_default_context(ctype, value, text):
+    assert ss.cast_char(value, _col(ctype)) == text
+
+
+def test_cast_char_wide_decimal_out_of_range_fails_closed():
+    with pytest.raises(ss.Unrepresentable):
+        ss.cast_char(Decimal("9" * 66), _col("decimal(65,0)"))
+
+
+def test_engine_hint_survives_a_blocker(tmp_path):
+    sql = ("-- MariaDB dump 10.19  Distrib 10.11.6-MariaDB, for debian-linux-gnu (x86_64)\n"
+           + _USER.format(bal="int(11)")
+           + "INSERT INTO `user` VALUES ('1','12.5',1,'Active','t');\n")
+    _c, out = _snapshot_of(tmp_path, sql)
+    assert out["result"].blockers == {ss.VALUE_UNREPRESENTABLE: 1}
+    assert out["result"].catalog["engine_hint"] == "MARIADB"
+
+
+def test_snapshot_growth_checks_free_space(tmp_path, monkeypatch):
+    from mirza2nexa.errors import DiskSpaceError
+
+    monkeypatch.setattr(ss, "DISK_CHECK_EVERY", 2)
+    p = tmp_path / "d.sql"
+    p.write_text(_USER.format(bal="int(11)") + "INSERT INTO `user` VALUES "
+                 + ",".join(f"('{i}',{i},1,'Active','t')" for i in range(1, 6)) + ";\n", encoding="utf-8")
+    col = ss.SnapshotCollector(tmp_path / "s.sqlite")
+    calls: list[int] = []
+
+    def full() -> None:
+        calls.append(1)
+        raise DiskSpaceError(detail="test")
+
+    col.disk_check = full
+    col.on_file(p)
+    try:
+        with pytest.raises(DiskSpaceError):
+            for ev in DumpReader(p).events():
+                if isinstance(ev, TableEvent):
+                    col.on_table(ev.table)
+                elif isinstance(ev, RowEvent):
+                    col.on_row(ev)
+            col.finish()
+    finally:
+        col.close()
+    assert calls
+
+
+def test_snapshot_write_is_cancellable(tmp_path):
+    from mirza2nexa.errors import Cancelled
+    from mirza2nexa.nxpkg import PackageWriter
+    from mirza2nexa.progress import CancelToken
+
+    p = tmp_path / "d.sql"
+    p.write_text(_USER.format(bal="int(11)") + "INSERT INTO `user` VALUES ('1',1,1,'Active','t');\n",
+                 encoding="utf-8")
+    col = ss.SnapshotCollector(tmp_path / "s.sqlite")
+    col.on_file(p)
+    for ev in DumpReader(p).events():
+        if isinstance(ev, TableEvent):
+            col.on_table(ev.table)
+        elif isinstance(ev, RowEvent):
+            col.on_row(ev)
+    token = CancelToken()
+    token.cancel()
+    try:
+        with pytest.raises(Cancelled):
+            col.write(PackageWriter(tmp_path / "stage"), cancel=token)
+    finally:
+        col.close()
