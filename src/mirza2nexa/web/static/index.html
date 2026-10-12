@@ -1,0 +1,897 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>میرزا به نکسا — استودیوی مهاجرت</title>
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#main">پرش به محتوای اصلی</a>
+
+<!-- Full-page fatal (session) message -->
+<div id="fatal" class="fatal" hidden role="alertdialog" aria-labelledby="fatal-title" aria-describedby="fatal-text">
+  <div class="fatal-card">
+    <img src="/static/icon.svg" alt="" width="56" height="56">
+    <h1 id="fatal-title">نشست برنامه معتبر نیست</h1>
+    <p id="fatal-text">برای امنیت، این صفحه فقط با پیوندی که برنامه هنگام اجرا باز می‌کند کار می‌کند. پنجره را ببندید و برنامه را دوباره از میانبر آن اجرا کنید.</p>
+    <p class="muted small" id="fatal-code"></p>
+  </div>
+</div>
+
+<!-- Loading splash -->
+<div id="splash" class="splash" role="status" aria-live="polite">
+  <div class="spinner" aria-hidden="true"></div>
+  <span>در حال آماده‌سازی نشست امن…</span>
+</div>
+
+<div id="app" class="app" hidden>
+  <aside class="sidebar" aria-label="ناوبری اصلی">
+    <div class="brand">
+      <img src="/static/icon.svg" alt="" width="36" height="36">
+      <div>
+        <div class="brand-title">میرزا ← نکسا</div>
+        <div class="brand-sub">استودیوی مهاجرت داده</div>
+      </div>
+    </div>
+    <nav>
+      <ul class="nav-list">
+        <li><button type="button" class="nav-item" data-view="dashboard" data-testid="nav-dashboard"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13h8V3H3zm0 8h8v-6H3zm10 0h8V11h-8zm0-18v6h8V3z"/></svg><span>داشبورد</span></button></li>
+        <li><button type="button" class="nav-item" data-view="new" data-testid="nav-new"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg><span>بکاپ جدید</span></button></li>
+        <li><button type="button" class="nav-item" data-view="status" data-testid="nav-status"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3a9 9 0 1 0 9 9h-2a7 7 0 1 1-7-7zm-1 4v6l5 3 .8-1.3-4.3-2.5V7z"/></svg><span>وضعیت تبدیل</span><span class="nav-badge" id="nav-status-badge" hidden></span></button></li>
+        <li><button type="button" class="nav-item" data-view="report" data-testid="nav-report"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9h3v10H5zm5.5-4h3v14h-3zM16 13h3v6h-3z"/></svg><span>آمار و گزارش</span></button></li>
+        <li><button type="button" class="nav-item" data-view="readiness" data-testid="nav-readiness"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 3 6v6c0 5.2 3.8 9.4 9 10 5.2-.6 9-4.8 9-10V6zm-1.2 14.2-3.5-3.5 1.4-1.4 2.1 2.1 4.9-4.9 1.4 1.4z"/></svg><span>آمادگی مهاجرت به NEXA</span></button></li>
+        <li><button type="button" class="nav-item" data-view="ownership" data-testid="nav-ownership"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0 2c-3.3 0-8 1.7-8 5v1h9.3a6 6 0 0 1-.3-2 6 6 0 0 1 1.1-3.5A12 12 0 0 0 12 14zm6 0-1.4 1.4 1.1 1.1H14v2h3.7l-1.1 1.1L18 23l3.5-3.5z"/></svg><span>بررسی مالکیت سرویس‌ها</span></button></li>
+        <li><button type="button" class="nav-item" data-view="coverage" data-testid="nav-coverage"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h18v4H3zm0 7h8v11H3zm10 0h8v4h-8zm0 7h8v4h-8z"/></svg><span>پوشش جدول‌ها</span></button></li>
+        <li><button type="button" class="nav-item" data-view="review" data-testid="nav-review"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v2H3zm0 6h12v2H3zm0 6h18v2H3z"/></svg><span>صف بررسی</span></button></li>
+        <li><button type="button" class="nav-item" data-view="preview" data-testid="nav-preview"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5C6 5 2 12 2 12s4 7 10 7 10-7 10-7-4-7-10-7zm0 11a4 4 0 1 1 0-8 4 4 0 0 1 0 8z"/></svg><span>پیش‌نمایش خروجی</span></button></li>
+        <li><button type="button" class="nav-item" data-view="download" data-testid="nav-download"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 3h2v10l3.5-3.5 1.4 1.4L12 16.8l-5.9-5.9 1.4-1.4L11 13zM4 19h16v2H4z"/></svg><span>دانلود بسته</span></button></li>
+        <li><button type="button" class="nav-item" data-view="history" data-testid="nav-history"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3a9 9 0 0 0-9 9H1l4 4 4-4H6a7 7 0 1 1 2 4.9l-1.4 1.4A9 9 0 1 0 13 3zm-1 5v5l4.3 2.5.7-1.2-3.5-2.1V8z"/></svg><span>تاریخچه</span></button></li>
+        <li><button type="button" class="nav-item" data-view="settings" data-testid="nav-settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 4 5v6c0 5 3.4 9.7 8 11 4.6-1.3 8-6 8-11V5zm-1 14-4-4 1.4-1.4L11 13.2l5.6-5.6L18 9z"/></svg><span>امنیت و منابع</span></button></li>
+      </ul>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="current-job" id="current-job-box" hidden>
+        <div class="muted small">عملیات جاری</div>
+        <div class="current-job-name" id="current-job-name"></div>
+        <div class="current-job-status small" id="current-job-status"></div>
+      </div>
+      <div class="offline-pill"><span class="dot" aria-hidden="true"></span>آفلاین — فقط روی همین کامپیوتر</div>
+    </div>
+  </aside>
+
+  <main id="main" class="content" tabindex="-1">
+    <div id="conn-banner" class="conn-banner" hidden role="status" aria-live="polite">اتصال قطع شد، در حال اتصال مجدد…</div>
+    <div id="error-box" class="error-box" data-testid="error-box" hidden role="alert">
+      <div class="error-main">
+        <strong class="error-message" id="error-message"></strong>
+        <span class="error-code" id="error-code"></span>
+      </div>
+      <div class="error-detail small" id="error-detail" hidden></div>
+      <button type="button" class="icon-btn error-close" id="error-close" aria-label="بستن پیام خطا">×</button>
+    </div>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+    <!-- 1. Dashboard -->
+    <section class="view" id="view-dashboard" data-view-name="dashboard" aria-labelledby="h-dashboard" hidden>
+      <header class="view-head">
+        <div>
+          <h1 id="h-dashboard">داشبورد</h1>
+          <p class="muted">تبدیل امن بکاپ SQL ربات میرزا به بسته مهاجرت NEXA — کاملاً آفلاین.</p>
+        </div>
+        <button type="button" class="btn btn-primary btn-lg" id="quick-start" data-testid="quick-start">شروع تبدیل بکاپ جدید</button>
+      </header>
+      <div class="grid-3">
+        <div class="card stat"><div class="stat-label">نسخه برنامه</div><div class="stat-value" id="app-version">—</div></div>
+        <div class="card stat"><div class="stat-label">عملیات در حال اجرا</div><div class="stat-value" id="running-count">—</div></div>
+        <div class="card stat"><div class="stat-label">عملیات این نشست</div><div class="stat-value" id="jobs-count">—</div></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h2>عملیات‌های این نشست</h2>
+          <button type="button" class="btn btn-ghost btn-sm" id="jobs-refresh">بروزرسانی</button>
+        </div>
+        <div id="jobs-empty" class="empty" hidden>هنوز عملیاتی در این نشست ثبت نشده است.</div>
+        <div class="table-wrap">
+          <table class="table" id="jobs-table" data-testid="jobs-table" hidden>
+            <thead><tr><th scope="col">فایل</th><th scope="col">وضعیت</th><th scope="col">پیشرفت</th><th scope="col">حجم</th><th scope="col">زمان ایجاد</th><th scope="col"><span class="sr-only">عملیات</span></th></tr></thead>
+            <tbody id="jobs-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card notes">
+        <h2>نکات ایمنی</h2>
+        <ul class="check-list">
+          <li>برنامه فقط روی آدرس <bdi dir="ltr">127.0.0.1</bdi> اجرا می‌شود و به اینترنت متصل نمی‌شود؛ هیچ داده‌ای از این کامپیوتر خارج نمی‌شود.</li>
+          <li>رمز فایل ZIP و رمز بسته هرگز ذخیره نمی‌شوند و فقط برای همان عملیات در حافظه نگه داشته می‌شوند.</li>
+          <li>فایل‌های SQL استخراج‌شده در پوشه موقت ایزوله نگهداری و پس از پردازش پاک می‌شوند.</li>
+          <li>بسته خروجی رمزنگاری‌شده است و کلید آن را باید جداگانه و امن نگه دارید.</li>
+          <li>تاریخچه فقط شامل آمار کلی است و نام، شناسه یا مبلغ مشتری در آن ذخیره نمی‌شود.</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 2. New backup wizard -->
+    <section class="view" id="view-new" data-view-name="new" aria-labelledby="h-new" hidden>
+      <header class="view-head">
+        <div>
+          <h1 id="h-new">بکاپ جدید</h1>
+          <p class="muted">فایل ZIP بکاپ میرزا را انتخاب کنید، ساختار آن را بررسی کنید و تنظیمات تبدیل را تعیین کنید.</p>
+        </div>
+      </header>
+      <ol class="stepper" aria-label="مراحل">
+        <li class="step" data-step="1"><span class="step-num">۱</span><span>انتخاب فایل</span></li>
+        <li class="step" data-step="2"><span class="step-num">۲</span><span>بررسی ساختار بکاپ</span></li>
+        <li class="step" data-step="3"><span class="step-num">۳</span><span>تنظیمات و شروع</span></li>
+      </ol>
+
+      <!-- Step 1 -->
+      <div class="card wizard-step" id="step-1" data-step-panel="1">
+        <h2>۱. انتخاب فایل ZIP بکاپ</h2>
+        <div class="dropzone" id="dropzone">
+          <svg viewBox="0 0 24 24" aria-hidden="true" class="dz-icon"><path d="M19 9h-4V3H9v6H5l7 7zM5 18v2h14v-2z"/></svg>
+          <p class="dz-title">فایل ZIP را اینجا رها کنید</p>
+          <p class="muted">یا</p>
+          <label class="btn btn-secondary" for="zip-input">انتخاب فایل از کامپیوتر</label>
+          <input type="file" id="zip-input" class="sr-only" accept=".zip,application/zip,application/x-zip-compressed" data-testid="zip-input" aria-describedby="file-info">
+          <p class="file-info" id="file-info" aria-live="polite">هنوز فایلی انتخاب نشده است.</p>
+        </div>
+        <div class="upload-progress" id="upload-progress" hidden>
+          <div class="progress-row">
+            <span id="upload-label">در حال بارگذاری…</span>
+            <span id="upload-percent" class="num">۰٪</span>
+          </div>
+          <div class="progress" role="progressbar" id="upload-bar" aria-labelledby="upload-label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="progress-fill" id="upload-fill"></div></div>
+          <div class="muted small" id="upload-bytes"></div>
+        </div>
+        <div class="actions">
+          <button type="button" class="btn btn-primary" id="upload-btn" data-testid="upload-btn" disabled>بارگذاری و بررسی</button>
+          <button type="button" class="btn btn-ghost" id="upload-cancel" hidden>لغو بارگذاری</button>
+        </div>
+      </div>
+
+      <!-- Step 2 -->
+      <div class="card wizard-step" id="step-2" data-step-panel="2" hidden>
+        <h2>۲. بررسی ساختار بکاپ</h2>
+        <dl class="kv-grid" id="inspect-summary"></dl>
+        <div class="table-wrap">
+          <table class="table" id="entries-table" data-testid="entries-table">
+            <caption class="sr-only">فایل‌های داخل بایگانی</caption>
+            <thead><tr><th scope="col">نام فایل</th><th scope="col">نوع</th><th scope="col">حجم</th><th scope="col">حجم فشرده</th><th scope="col">روش فشرده‌سازی</th></tr></thead>
+            <tbody id="entries-tbody"></tbody>
+          </table>
+        </div>
+        <div class="pager" id="entries-pager"></div>
+        <div class="actions">
+          <button type="button" class="btn btn-primary" id="to-step-3" data-testid="to-step-3">ادامه: تنظیمات تبدیل</button>
+          <button type="button" class="btn btn-ghost" id="discard-upload">انصراف و حذف فایل</button>
+        </div>
+      </div>
+
+      <!-- Step 3 -->
+      <form class="card wizard-step" id="step-3" data-step-panel="3" hidden novalidate autocomplete="off">
+        <h2>۳. تنظیمات تبدیل</h2>
+
+        <fieldset class="field" id="password-field" hidden>
+          <legend>رمز فایل ZIP</legend>
+          <label for="zip-password">رمز بکاپ <span class="muted small" id="enc-type"></span></label>
+          <div class="input-group">
+            <input type="password" id="zip-password" data-testid="zip-password" autocomplete="off" spellcheck="false" autocapitalize="off" dir="ltr" aria-describedby="zip-password-help zip-password-error">
+            <button type="button" class="btn btn-ghost toggle-vis" data-toggle-for="zip-password" aria-pressed="false" aria-label="نمایش رمز">نمایش</button>
+          </div>
+          <p class="help" id="zip-password-help">رمز فقط برای همین عملیات استفاده می‌شود و هیچ‌جا ذخیره نمی‌شود.</p>
+          <p class="field-error" id="zip-password-error" data-testid="zip-password-error" role="alert" hidden></p>
+        </fieldset>
+
+        <div class="field">
+          <label for="money-unit">واحد مبالغ در دیتابیس میرزا</label>
+          <select id="money-unit" data-testid="money-unit" aria-describedby="money-unit-help">
+            <option value="">از شواهد / تعیین‌نشده — در صورت نبود شواهد، مبالغ مسدود می‌شوند</option>
+            <option value="toman">تومان</option>
+            <option value="rial">ریال</option>
+          </select>
+          <p class="help warn-text" id="money-unit-help">انتخاب اشتباه واحد، همه موجودی‌ها و مبالغ را ده برابر کم یا زیاد می‌کند. واحد را حتماً با مدیر ربات میرزا تأیید کنید. اگر مطمئن نیستید «تعیین‌نشده» را انتخاب کنید تا مبالغ تا زمان تأیید مسدود بمانند.</p>
+        </div>
+
+        <fieldset class="field">
+          <legend>کلید رمزنگاری بسته خروجی</legend>
+          <div class="radio-list">
+            <label class="radio-card">
+              <input type="radio" name="secret-mode" value="generated" checked data-testid="secret-generated">
+              <span><strong>کلید تصادفی جداگانه تولید شود</strong> <span class="badge badge-ok">پیشنهادی</span><br><span class="muted small">یک کلید قوی تولید می‌شود که باید پس از پایان، جداگانه دانلود و امن نگه داشته شود.</span></span>
+            </label>
+            <label class="radio-card">
+              <input type="radio" name="secret-mode" value="passphrase" data-testid="secret-passphrase">
+              <span><strong>رمز عبور دلخواه</strong><br><span class="muted small">حداقل ۱۲ کاراکتر؛ بسته فقط با همین رمز باز می‌شود.</span></span>
+            </label>
+          </div>
+          <div id="passphrase-fields" hidden>
+            <div class="field">
+              <label for="pkg-pass">رمز بسته</label>
+              <div class="input-group">
+                <input type="password" id="pkg-pass" data-testid="pkg-pass" autocomplete="new-password" spellcheck="false" dir="ltr" minlength="12" aria-describedby="pkg-pass-error">
+                <button type="button" class="btn btn-ghost toggle-vis" data-toggle-for="pkg-pass" aria-pressed="false" aria-label="نمایش رمز">نمایش</button>
+              </div>
+            </div>
+            <div class="field">
+              <label for="pkg-pass2">تکرار رمز بسته</label>
+              <input type="password" id="pkg-pass2" data-testid="pkg-pass2" autocomplete="new-password" spellcheck="false" dir="ltr" aria-describedby="pkg-pass-error">
+            </div>
+            <p class="field-error" id="pkg-pass-error" role="alert" hidden></p>
+          </div>
+        </fieldset>
+
+        <div class="field">
+          <label for="previous-job">مقایسه با تبدیل قبلی (اختیاری)</label>
+          <select id="previous-job" data-testid="previous-job" aria-describedby="previous-job-help">
+            <option value="">بدون مقایسه</option>
+          </select>
+          <p class="help" id="previous-job-help">فقط تبدیل‌های کامل‌شده در همین نشست قابل انتخاب هستند. تفاوت تعداد رکوردها و موجودی‌ها در گزارش نمایش داده می‌شود.</p>
+        </div>
+
+        <fieldset class="field" id="panel-targets-field" data-testid="panel-targets" aria-describedby="pt-help pt-safety">
+          <legend>پنل مقصد در NEXA (اختیاری)</legend>
+          <p class="help" id="pt-help">پنل اصلی در میرزا با نوع <bdi dir="ltr">marzban</bdi> ثبت شده است، اما همان پنل در NEXA از نوع <bdi dir="ltr">RickPanel</bdi> است. برای هر کد پنل میرزا که می‌خواهید، نوع پنل مقصد را مشخص کنید. اگر شناسه پنل NEXA را خالی بگذارید، پنل ابتدا باید در NEXA از مسیر امن ایجاد و سپس متصل شود.</p>
+          <ul class="help pt-safety" id="pt-safety">
+            <li>فقط نوع مقصد پنل‌های انتخاب‌شده در NEXA تعیین می‌شود.</li>
+            <li>مشتری، سرویس، حجم، تاریخ انقضا و شناسه‌های قدیمی هرگز تغییر نمی‌کنند.</li>
+            <li>هیچ سرویسی دوباره ساخته نمی‌شود و مبدل به هیچ پنلی وصل نمی‌شود.</li>
+            <li>هیچ اطلاعات ورود پنل (آدرس، نام کاربری، رمز یا توکن) اینجا وارد نمی‌شود.</li>
+          </ul>
+          <p class="help" id="pt-codes-status" data-testid="pt-codes-status"></p>
+          <datalist id="pt-codes"></datalist>
+          <div class="pt-rows" id="pt-rows" data-testid="pt-rows"></div>
+          <p class="field-error" id="panel-targets-error" data-testid="panel-targets-error" role="alert" hidden></p>
+          <div class="actions pt-actions">
+            <button type="button" class="btn btn-ghost btn-sm" id="pt-add" data-testid="pt-add">افزودن پنل مقصد</button>
+          </div>
+        </fieldset>
+
+        <div class="actions">
+          <button type="submit" class="btn btn-primary btn-lg" id="start-btn" data-testid="start-btn">شروع تبدیل</button>
+          <button type="button" class="btn btn-ghost" id="back-step-2">بازگشت</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- 3. Status -->
+    <section class="view" id="view-status" data-view-name="status" aria-labelledby="h-status" hidden>
+      <header class="view-head">
+        <div>
+          <h1 id="h-status">وضعیت تبدیل</h1>
+          <p class="muted" id="status-file"></p>
+        </div>
+        <span class="status-badge" id="job-status" data-testid="job-status">—</span>
+      </header>
+      <div class="empty card" id="status-empty" hidden>عملیات فعالی انتخاب نشده است. از «بکاپ جدید» شروع کنید یا از داشبورد یک عملیات را باز کنید.</div>
+      <div id="status-body" hidden>
+        <div class="card">
+          <div class="progress-row big">
+            <span id="status-stage-text" aria-live="polite">—</span>
+            <span class="num percent" id="overall-percent" data-testid="overall-percent">۰٪</span>
+          </div>
+          <div class="progress progress-lg" role="progressbar" id="overall-bar" aria-label="پیشرفت کلی" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="progress-fill" id="overall-fill"></div></div>
+          <div class="meta-row muted small">
+            <span>مرحله: <span id="stage-counter" class="num">—</span></span>
+            <span>زمان سپری‌شده: <span id="elapsed" class="num">—</span></span>
+          </div>
+          <div class="sr-only" id="status-live" aria-live="polite" aria-atomic="true"></div>
+        </div>
+        <div class="card">
+          <h2>مراحل</h2>
+          <ol class="stage-list" id="stage-list" data-testid="stage-list"></ol>
+        </div>
+        <div class="card job-error" id="job-error" data-testid="job-error" hidden role="alert">
+          <strong id="job-error-message"></strong>
+          <span class="error-code" id="job-error-code"></span>
+          <div class="small muted" id="job-error-detail"></div>
+        </div>
+        <div class="actions">
+          <button type="button" class="btn btn-danger" id="cancel-btn" data-testid="cancel-btn" hidden>لغو عملیات</button>
+          <button type="button" class="btn btn-primary" id="retry-btn" data-testid="retry-btn" hidden>تنظیم دوباره و تلاش مجدد</button>
+          <button type="button" class="btn btn-primary" id="goto-report" hidden>مشاهده گزارش</button>
+          <button type="button" class="btn btn-secondary" id="goto-download" hidden>دانلود بسته</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. Report -->
+    <section class="view" id="view-report" data-view-name="report" aria-labelledby="h-report" hidden>
+      <header class="view-head">
+        <div>
+          <h1 id="h-report">آمار و گزارش</h1>
+          <p class="muted">نتیجه تبدیل، تطبیق مالی و موارد مسدودکننده.</p>
+        </div>
+        <div class="actions head-actions">
+          <a class="btn btn-primary" id="download-report-html" data-testid="download-report-html" download hidden>دانلود گزارش فارسی (HTML)</a>
+          <a class="btn btn-secondary" id="report-download" data-testid="report-download" download hidden>دانلود گزارش JSON</a>
+        </div>
+      </header>
+      <div class="empty card" id="report-empty">گزارش پس از کامل شدن تبدیل در دسترس است.</div>
+      <div id="report-body" hidden>
+        <div class="readiness" id="readiness" data-testid="readiness" role="status"></div>
+        <div class="card">
+          <h2>شناسه‌ها و واحد پول</h2>
+          <dl class="kv-grid" id="report-meta"></dl>
+        </div>
+        <div class="card importer-warning" data-testid="report-importer-warning" role="note">
+          <strong>Importer نکسا هنوز ساخته نشده است.</strong>
+          <span>این بسته یک قرارداد پیشنهادی است و قابلیت ورود آن به NEXA تأیید نشده است.</span>
+        </div>
+        <div class="stat-grid" id="history-cards" data-testid="history-cards" hidden></div>
+        <h2 class="section-title">تعداد رکوردها</h2>
+        <div class="stat-grid" id="count-cards" data-testid="count-cards"></div>
+        <div class="grid-3" id="class-sections" data-testid="class-sections"></div>
+        <div class="grid-2">
+          <div class="card">
+            <h2>موارد مسدودکننده <span class="pill pill-bad num" id="blocker-count">۰</span></h2>
+            <div id="blocker-groups" data-testid="blocker-groups"></div>
+            <ul class="issue-list" id="blocker-list" data-testid="blocker-list" hidden></ul>
+            <div id="blocked-entities" data-testid="blocked-entities"></div>
+          </div>
+          <div class="card">
+            <h2>هشدارها <span class="pill pill-warn num" id="warning-count">۰</span></h2>
+            <ul class="issue-list" id="warning-list" data-testid="warning-list"></ul>
+          </div>
+        </div>
+        <div class="card">
+          <h2>تطبیق مالی و کنترل‌ها</h2>
+          <p class="muted small">هر بخش با برچسب فارسی نمایش داده می‌شود؛ کد فنی هر مورد به‌صورت کوچک کنار آن آمده است.</p>
+          <div id="reconciliation" data-testid="reconciliation"></div>
+        </div>
+        <div class="card">
+          <h2>نگاشت جداول به NEXA</h2>
+          <div class="table-wrap">
+            <table class="table" id="mapping-table" data-testid="mapping-table">
+              <thead><tr><th scope="col">بخش</th><th scope="col">جدول مبدأ</th><th scope="col">ستون‌ها</th><th scope="col">مقصد</th><th scope="col">وضعیت</th><th scope="col">توضیح</th></tr></thead>
+              <tbody id="mapping-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card" id="diff-card">
+          <h2>مقایسه با تبدیل قبلی</h2>
+          <div id="diff-body" data-testid="diff"></div>
+        </div>
+        <div class="card">
+          <h2>تشخیص نسخه ساختار</h2>
+          <div id="schema-body" data-testid="schema"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4a. Migration readiness -->
+    <section class="view" id="view-readiness" data-view-name="readiness" aria-labelledby="h-readiness" hidden>
+      <header class="view-head">
+        <div>
+          <h1 id="h-readiness">آمادگی مهاجرت به NEXA</h1>
+          <p class="muted">جمع‌بندی کلی: سلامت بسته، تطبیق مالی، پوشش، مالکیت، پنل‌ها، موارد بررسی و تصمیم‌های لازم مالک. فقط آمار کلی؛ بدون اطلاعات شخصی.</p>
+        </div>
+        <div class="actions head-actions">
+          <a class="btn btn-primary" id="download-readiness-html" data-testid="download-readiness-html" download hidden>دانلود گزارش آمادگی (HTML)</a>
+          <a class="btn btn-secondary" id="download-readiness-json" data-testid="download-readiness-json" download hidden>دانلود JSON آمادگی</a>
+        </div>
+      </header>
+      <div class="empty card" id="readiness-empty">گزارش آمادگی پس از کامل شدن تبدیل در دسترس است.</div>
+      <div id="readiness-body" hidden>
+        <div class="readiness" id="readiness-verdict" data-testid="readiness-verdict" role="status"></div>
+        <div class="card importer-warning" data-testid="readiness-disclaimer" role="note">
+          <strong>«آماده» به معنی مجوز Import نیست.</strong>
+          <span>این نتیجه فقط می‌گوید بسته برای اجرای آزمایشی (Dry-run) یک Importer آینده مناسب است یا نه. Importer نکسا هنوز ساخته نشده و هیچ داده‌ای وارد NEXA نشده است.</span>
+        </div>
+        <div class="card">
+          <h2>مشخصات</h2>
+          <dl class="kv-grid" id="readiness-meta" data-testid="readiness-meta"></dl>
+        </div>
+        <div class="grid-2">
+          <div class="card" id="readiness-health" data-testid="readiness-health">
+            <h2>سلامت بسته</h2>
+            <dl class="kv-grid" id="readiness-health-kv"></dl>
+            <ul class="issue-list" id="readiness-health-blockers"></ul>
+          </div>
+          <div class="card" id="readiness-financial" data-testid="readiness-financial">
+            <h2>تطبیق مالی</h2>
+            <dl class="kv-grid" id="readiness-financial-kv"></dl>
+            <div id="readiness-financial-extra"></div>
+          </div>
+          <div class="card" id="readiness-coverage" data-testid="readiness-coverage">
+            <h2>پوشش جدول‌ها</h2>
+            <dl class="kv-grid" id="readiness-coverage-kv"></dl>
+            <div id="readiness-coverage-extra"></div>
+          </div>
+          <div class="card" id="readiness-ownership" data-testid="readiness-ownership">
+            <h2>مالکیت سرویس‌ها</h2>
+            <dl class="kv-grid" id="readiness-ownership-kv"></dl>
+            <div id="readiness-ownership-extra"></div>
+          </div>
+          <div class="card" id="readiness-panels" data-testid="readiness-panels">
+            <h2>نگاشت پنل‌ها</h2>
+            <dl class="kv-grid" id="readiness-panels-kv"></dl>
+            <div class="readiness-mini" id="readiness-panel-targets" data-testid="readiness-panel-targets"></div>
+            <p class="muted small">مبدل هرگز به پنل‌ها وصل نمی‌شود و هیچ سرویسی را ایجاد، تمدید یا حذف نمی‌کند.</p>
+          </div>
+          <div class="card" id="readiness-import-blockers" data-testid="readiness-import-blockers">
+            <h2>موانع Import <span class="pill pill-bad num" id="readiness-import-blocker-count">۰</span></h2>
+            <ul class="issue-list" id="readiness-import-blocker-list"></ul>
+          </div>
+        </div>
+        <h2 class="section-title">موارد بررسی</h2>
+        <div class="stat-grid" id="readiness-review-stats" data-testid="readiness-review-stats"></div>
+        <div class="card">
+          <h2>گروه‌های بررسی</h2>
+          <div class="table-wrap">
+            <table class="table" id="readiness-review-groups" data-testid="readiness-review-groups">
+              <caption class="sr-only">گروه‌های موارد بررسی</caption>
+              <thead><tr><th scope="col">گروه</th><th scope="col">موارد</th><th scope="col">رکوردها</th><th scope="col">قابل حل با کد</th><th scope="col">فقط آرشیو</th><th scope="col">تصمیم مالک</th><th scope="col">هنگام Adoption</th></tr></thead>
+              <tbody id="readiness-review-groups-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card" id="readiness-owner-decisions" data-testid="readiness-owner-decisions">
+          <h2>تصمیم‌های لازم مالک <span class="pill pill-warn num" id="readiness-owner-decision-count">۰</span></h2>
+          <ul class="issue-list" id="readiness-owner-decision-list"></ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4a2. Bulk ownership review -->
+    <section class="view" id="view-ownership" data-view-name="ownership" aria-labelledby="h-ownership" hidden>
+      <header class="view-head">
+        <div>
+          <h1 id="h-ownership">بررسی مالکیت سرویس‌ها</h1>
+          <p class="muted">تعیین تکلیف گروهی سرویس‌هایی که مالک آن‌ها با شواهد بکاپ اثبات نشده است. هیچ سرویسی روی پنل ساخته، تمدید، غیرفعال یا حذف نمی‌شود.</p>
+        </div>
+        <div class="actions head-actions">
+          <button type="button" class="btn btn-ghost" id="own-refresh" data-testid="own-refresh">به‌روزرسانی</button>
+        </div>
+      </header>
+      <div class="empty card" id="own-empty">بررسی مالکیت پس از کامل شدن تبدیل در دسترس است.</div>
+      <div id="own-body" hidden>
+        <div class="own-sealed" id="own-sealed" data-testid="own-sealed" role="status" hidden></div>
+        <div class="card importer-warning" id="own-disclaimer" data-testid="own-disclaimer" role="note">
+          <strong>تأیید مدیر، اثبات مالکیت نیست.</strong>
+          <span id="own-disclaimer-text"></span>
+        </div>
+        <div class="stat-grid own-summary" id="own-summary" data-testid="own-summary" aria-live="polite"></div>
+        <p class="muted small" id="own-summary-meta"></p>
+
+        <form class="card filters" id="own-filters" data-testid="own-filters" novalidate>
+          <div class="field inline">
+            <label for="own-f-final_class">نتیجه نهایی</label>
+            <select id="own-f-final_class" data-filter="final_class" data-testid="own-f-final_class"></select>
+          </div>
+          <div class="field inline">
+            <label for="own-f-eligibility">قابلیت تصمیم</label>
+            <select id="own-f-eligibility" data-filter="eligibility" data-testid="own-f-eligibility"></select>
+          </div>
+          <div class="field inline">
+            <label for="own-f-review_state">وضعیت بررسی</label>
+            <select id="own-f-review_state" data-filter="review_state" data-testid="own-f-review_state"></select>
+          </div>
+          <div class="field inline">
+            <label for="own-f-panel">پنل</label>
+            <select id="own-f-panel" data-filter="panel" data-testid="own-f-panel"></select>
+          </div>
+          <div class="field inline">
+            <label for="own-f-status_class">وضعیت فاکتور</label>
+            <select id="own-f-status_class" data-filter="status_class" data-testid="own-f-status_class"></select>
+          </div>
+          <div class="field inline">
+            <label for="own-f-reason">دلیل</label>
+            <select id="own-f-reason" data-filter="reason" data-testid="own-f-reason"></select>
+          </div>
+          <div class="field inline">
+            <label for="own-f-live_status">وضعیت روی پنل</label>
+            <select id="own-f-live_status" data-filter="live_status" data-testid="own-f-live_status"></select>
+          </div>
+          <div class="field inline">
+            <label for="own-q">شناسه فاکتور</label>
+            <input type="text" id="own-q" data-testid="own-q" dir="ltr" spellcheck="false" autocomplete="off" placeholder="ابتدای شناسه">
+          </div>
+          <div class="actions own-filter-actions">
+            <button type="submit" class="btn btn-secondary" data-testid="own-apply">اعمال فیلتر</button>
+            <button type="button" class="btn btn-ghost" id="own-reset-filters" data-testid="own-reset-filters">حذف فیلترها</button>
+          </div>
+        </form>
+
+        <div class="card">
+          <div class="own-selbar" role="group" aria-label="انتخاب و اقدام گروهی">
+            <div class="own-selinfo">
+              <span id="own-sel-count" data-testid="own-sel-count" aria-live="polite">هیچ موردی انتخاب نشده است.</span>
+              <button type="button" class="btn btn-ghost btn-sm" id="own-select-filtered" data-testid="own-select-filtered" hidden></button>
+              <button type="button" class="btn btn-ghost btn-sm" id="own-clear-sel" data-testid="own-clear-sel" hidden>لغو انتخاب</button>
+            </div>
+            <div class="own-actions">
+              <label class="sr-only" for="own-note">یادداشت دسته (اختیاری)</label>
+              <input type="text" id="own-note" data-testid="own-note" maxlength="200" autocomplete="off" placeholder="یادداشت (اختیاری؛ اطلاعات مشتری ننویسید)">
+              <button type="button" class="btn btn-primary" id="own-act-approve" data-action="APPROVE" data-testid="own-act-approve" disabled>تأیید مالک ثبت‌شده در فاکتور</button>
+              <button type="button" class="btn btn-danger" id="own-act-reject" data-action="REJECT" data-testid="own-act-reject" disabled>رد و انتقال به قرنطینه</button>
+              <button type="button" class="btn btn-ghost" id="own-act-reset" data-action="RESET" data-testid="own-act-reset" disabled>بازگشت به در انتظار</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="table own-table" id="own-table" data-testid="own-table">
+              <caption class="sr-only">سرویس‌ها برای بررسی مالکیت؛ برای دیدن جزئیات، شناسه فاکتور را انتخاب کنید.</caption>
+              <thead><tr>
+                <th scope="col" class="own-check"><input type="checkbox" id="own-check-page" data-testid="own-check-page" aria-label="انتخاب همه موارد این صفحه"></th>
+                <th scope="col">شناسه فاکتور</th>
+                <th scope="col">پنل</th>
+                <th scope="col">وضعیت فاکتور</th>
+                <th scope="col">قابلیت تصمیم</th>
+                <th scope="col">نتیجه نهایی</th>
+                <th scope="col">وضعیت روی پنل</th>
+                <th scope="col">دلیل‌ها</th>
+              </tr></thead>
+              <tbody id="own-tbody"></tbody>
+            </table>
+          </div>
+          <div class="pager" id="own-pager"></div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card" id="own-batches" data-testid="own-batches">
+            <h2>دسته‌های ثبت‌شده</h2>
+            <div class="table-wrap">
+              <table class="table">
+                <thead><tr><th scope="col">زمان</th><th scope="col">اقدام</th><th scope="col">اعمال‌شده</th><th scope="col">بدون تغییر</th><th scope="col">یادداشت</th><th scope="col"><span class="sr-only">بازگرداندن</span></th></tr></thead>
+                <tbody id="own-batches-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="card" id="own-audit" data-testid="own-audit">
+            <div class="card-head">
+              <h2>دفتر رویدادها</h2>
+              <button type="button" class="btn btn-secondary btn-sm" id="own-audit-verify" data-testid="own-audit-verify">بررسی سلامت زنجیره</button>
+            </div>
+            <p class="small" id="own-audit-result" data-testid="own-audit-result" role="status" hidden></p>
+            <div class="table-wrap">
+              <table class="table table-compact">
+                <thead><tr><th scope="col">#</th><th scope="col">زمان</th><th scope="col">اقدام</th><th scope="col">فاکتور</th><th scope="col">از</th><th scope="col">به</th></tr></thead>
+                <tbody id="own-audit-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card" id="own-live" data-testid="own-live">
+            <h2>بررسی فقط‌خواندنی وضعیت روی پنل</h2>
+            <p class="muted small">فقط وضعیت سرویس خوانده می‌شود و هیچ تغییری روی پنل انجام نمی‌شود. وضعیت روی پنل فقط نشانه ریسک است و مالکیت را اثبات نمی‌کند.</p>
+            <div class="note" id="own-live-off" data-testid="own-live-off" hidden>
+              بررسی فقط‌خواندنی پنل به‌طور پیش‌فرض خاموش است. در صورت نیاز می‌توانید آن را در «امنیت و منابع» روشن کنید.
+              <div class="actions"><button type="button" class="btn btn-ghost btn-sm" id="own-live-settings">رفتن به تنظیمات</button></div>
+            </div>
+            <form id="own-live-form" novalidate hidden>
+              <div class="field">
+                <label for="own-live-panel">کد پنل در میرزا</label>
+                <select id="own-live-panel" data-testid="own-live-panel"></select>
+              </div>
+              <div class="field">
+                <label for="own-live-url">نشانی پنل</label>
+                <input type="text" id="own-live-url" data-testid="own-live-url" dir="ltr" spellcheck="false" autocomplete="off" placeholder="https://panel.example:8000">
+              </div>
+              <div class="field">
+                <label for="own-live-user">نام کاربری مدیر پنل</label>
+                <input type="text" id="own-live-user" data-testid="own-live-user" dir="ltr" spellcheck="false" autocomplete="off">
+              </div>
+              <div class="field">
+                <label for="own-live-pass">رمز مدیر پنل</label>
+                <input type="password" id="own-live-pass" data-testid="own-live-pass" dir="ltr" autocomplete="off" aria-describedby="own-live-help">
+                <p class="help" id="own-live-help">اطلاعات ورود فقط برای همین بررسی در حافظه برنامه نگه داشته می‌شود و ذخیره نمی‌شود. فقط سرویس‌های همین پنل در نتایج فیلتر فعلی بررسی می‌شوند.</p>
+              </div>
+              <div class="actions">
+                <button type="submit" class="btn btn-secondary" id="own-live-start" data-testid="own-live-start">بررسی فقط‌خواندنی</button>
+                <button type="button" class="btn btn-ghost" id="own-live-cancel" data-testid="own-live-cancel" hidden>توقف بررسی</button>
+              </div>
+            </form>
+            <div id="own-live-progress" hidden>
+              <div class="progress" id="own-live-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="پیشرفت بررسی پنل"><div class="progress-fill" id="own-live-fill"></div></div>
+              <p class="small" id="own-live-text" role="status" aria-live="polite"></p>
+            </div>
+          </div>
+          <div class="card" id="own-final" data-testid="own-final">
+            <h2>نهایی‌سازی و خروجی</h2>
+            <p class="muted small">پس از مهر و موم، هیچ تصمیمی قابل تغییر نیست. پیش از آن، همه تصمیم‌ها قابل بازگرداندن هستند.</p>
+            <div class="actions">
+              <button type="button" class="btn btn-warn" id="own-seal" data-testid="own-seal">مهر و موم تصمیم‌ها</button>
+              <button type="button" class="btn btn-secondary" id="own-export" data-testid="own-export">دانلود فایل تصمیم‌ها (JSON امضاشده)</button>
+            </div>
+            <form id="own-export-pass-form" class="own-export-pass" novalidate hidden>
+              <div class="field">
+                <label for="own-export-pass">رمز بسته</label>
+                <input type="password" id="own-export-pass" data-testid="own-export-pass" dir="ltr" autocomplete="off" aria-describedby="own-export-pass-help">
+                <p class="help" id="own-export-pass-help">این بسته با رمز ساخته شده است؛ برای امضای فایل تصمیم‌ها همان رمز لازم است. رمز ذخیره نمی‌شود.</p>
+              </div>
+              <button type="submit" class="btn btn-secondary btn-sm" data-testid="own-export-pass-submit">دانلود با رمز</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4b. Coverage -->
+    <section class="view" id="view-coverage" data-view-name="coverage" aria-labelledby="h-coverage" hidden>
+      <header class="view-head">
+        <div>
+          <h1 id="h-coverage">پوشش جدول‌ها</h1>
+          <p class="muted">سرنوشت تک‌تک جدول‌های بکاپ: چه چیزی منتقل شد، چه چیزی آرشیو شد و چه چیزی هنوز پوشش داده نشده است.</p>
+        </div>
+        <a class="btn btn-secondary" id="download-coverage-csv" data-testid="download-coverage-csv" download hidden>دانلود CSV پوشش (Excel)</a>
+      </header>
+      <div class="empty card" id="coverage-empty">پوشش جدول‌ها پس از کامل شدن تبدیل در دسترس است.</div>
+      <div id="coverage-body" hidden>
+        <div class="stat-grid" id="coverage-summary" data-testid="coverage-summary"></div>
+        <div class="card uncovered-card" id="uncovered-card" role="note">
+          <h2>جدول‌های پوشش‌داده‌نشده <span class="pill pill-bad num" id="uncovered-count">۰</span></h2>
+          <p class="muted small">جدول‌هایی که طبقه‌بندی ندارند یا مسدود شده‌اند؛ تا تعیین تکلیف، بسته قابل Import نیست.</p>
+          <ul class="issue-list" id="uncovered-list" data-testid="uncovered-list"></ul>
+        </div>
+        <form class="card filters" id="coverage-filters" novalidate>
+          <div class="field inline">
+            <label for="coverage-class">طبقه</label>
+            <select id="coverage-class" data-testid="coverage-class"><option value="">همه</option></select>
+          </div>
+          <div class="field inline">
+            <label for="coverage-status">وضعیت</label>
+            <select id="coverage-status" data-testid="coverage-status"><option value="">همه</option></select>
+          </div>
+          <span class="muted small" id="coverage-shown" aria-live="polite"></span>
+        </form>
+        <div class="card">
+          <div class="table-wrap">
+            <table class="table" id="coverage-table" data-testid="coverage-table">
+              <caption class="sr-only">پوشش جدول‌های بکاپ</caption>
+              <thead><tr><th scope="col">جدول</th><th scope="col">طبقه</th><th scope="col">وضعیت</th><th scope="col">ردیف</th><th scope="col">خروجی / آرشیو / بررسی / کنار</th><th scope="col">ستون‌ها و خانه‌ها</th></tr></thead>
+              <tbody id="coverage-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. Review queue -->
+    <section class="view" id="view-review" data-view-name="review" aria-labelledby="h-review" hidden>
+      <header class="view-head">
+        <div>
+          <h1 id="h-review">صف بررسی</h1>
+          <p class="muted">رکوردهایی که تبدیل نشده‌اند یا نیاز به بررسی انسانی دارند.</p>
+        </div>
+      </header>
+      <div class="empty card" id="review-empty">صف بررسی پس از کامل شدن تبدیل در دسترس است.</div>
+      <div id="review-body" hidden>
+        <form class="card filters" id="review-filters" novalidate>
+          <div class="field inline">
+            <label for="review-severity">شدت</label>
+            <select id="review-severity" data-testid="review-severity">
+              <option value="">همه</option>
+              <option value="blocker">مسدودکننده</option>
+              <option value="warning">هشدار</option>
+            </select>
+          </div>
+          <div class="field inline">
+            <label for="review-kind">نوع</label>
+            <input type="text" id="review-kind" data-testid="review-kind" list="review-kinds" dir="ltr" spellcheck="false" placeholder="مثلاً customer">
+            <datalist id="review-kinds"></datalist>
+          </div>
+          <div class="field inline">
+            <label for="review-limit">تعداد در صفحه</label>
+            <select id="review-limit">
+              <option value="25">۲۵</option>
+              <option value="50" selected>۵۰</option>
+              <option value="100">۱۰۰</option>
+            </select>
+          </div>
+          <button type="submit" class="btn btn-secondary">اعمال فیلتر</button>
+        </form>
+        <div class="card">
+          <div class="table-wrap">
+            <table class="table" id="review-table" data-testid="review-table">
+              <thead><tr><th scope="col">شدت</th><th scope="col">نوع</th><th scope="col">کد</th><th scope="col">پیام</th><th scope="col">بخش</th><th scope="col">مرجع مبدأ</th><th scope="col">داده</th></tr></thead>
+              <tbody id="review-tbody"></tbody>
+            </table>
+          </div>
+          <div class="pager" id="review-pager"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6. Preview -->
+    <section class="view" id="view-preview" data-view-name="preview" aria-labelledby="h-preview" hidden>
+      <header class="view-head">
+        <div>
+          <h1 id="h-preview">پیش‌نمایش خروجی</h1>
+          <p class="muted">نمونه‌ای از رکوردهای تبدیل‌شده (حداکثر ۲۰ رکورد اول).</p>
+        </div>
+      </header>
+      <div class="empty card" id="preview-empty">پیش‌نمایش پس از کامل شدن تبدیل در دسترس است.</div>
+      <div id="preview-body" hidden>
+        <div class="card filters">
+          <div class="field inline">
+            <label for="preview-entity">بخش</label>
+            <select id="preview-entity" data-testid="preview-entity"></select>
+          </div>
+          <button type="button" class="btn btn-secondary" id="preview-load">نمایش</button>
+        </div>
+        <div class="card">
+          <div id="preview-msg" class="empty" hidden></div>
+          <div class="table-wrap">
+            <table class="table table-compact" id="preview-table" data-testid="preview-table" hidden>
+              <thead><tr id="preview-head"></tr></thead>
+              <tbody id="preview-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 7. Download -->
+    <section class="view" id="view-download" data-view-name="download" aria-labelledby="h-download" hidden>
+      <header class="view-head">
+        <div>
+          <h1 id="h-download">دانلود بسته</h1>
+          <p class="muted">بسته مهاجرت NEXA (‎.nxpkg‎) و کلید آن.</p>
+        </div>
+      </header>
+      <div class="empty card" id="download-empty">بسته پس از کامل شدن تبدیل آماده می‌شود.</div>
+      <div id="download-body" hidden>
+        <div class="card warn-card" id="key-card" hidden role="note">
+          <h2>کلید بسته را جداگانه ذخیره کنید</h2>
+          <p>کلید بسته را جداگانه ذخیره کنید؛ بدون آن بسته باز نمی‌شود و این کلید فقط در همین نشست در دسترس است.</p>
+          <p class="small">کلید را کنار بسته نگه ندارید و از طریق پیام‌رسان یا ایمیل ارسال نکنید.</p>
+          <a class="btn btn-warn" id="download-key" data-testid="download-key" download>دانلود کلید بسته (‎.nxkey‎)</a>
+        </div>
+        <div class="card" id="package-preview" data-testid="package-preview" hidden>
+          <div class="card-head">
+            <h2>پیش‌نمایش کامل بسته</h2>
+            <span class="contract-version">نسخه قرارداد بسته: <bdi dir="ltr" class="mono" id="contract-version" data-testid="contract-version">—</bdi></span>
+          </div>
+          <div class="importer-warning" id="importer-warning" data-testid="importer-warning" role="alert">
+            <strong>هشدار: Importer نکسا هنوز ساخته نشده است.</strong>
+            <span>قالب این بسته یک قرارداد پیشنهادی است و قابلیت ورود (Import) آن به NEXA تأیید نشده است. از این بسته در سرور اصلی استفاده نکنید.</span>
+          </div>
+          <dl class="kv-grid" id="package-preview-meta"></dl>
+          <div id="package-preview-blockers"></div>
+          <h3 class="small">فایل‌های داخل بسته</h3>
+          <div class="table-wrap">
+            <table class="table table-compact" id="package-files" data-testid="package-files">
+              <thead><tr><th scope="col">مسیر</th><th scope="col">بخش</th><th scope="col">رکورد</th><th scope="col">حجم</th><th scope="col">SHA-256</th></tr></thead>
+              <tbody id="package-files-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <h2>بسته مهاجرت</h2>
+          <dl class="kv-grid" id="package-meta"></dl>
+          <div class="actions">
+            <a class="btn btn-primary btn-lg" id="download-pkg" data-testid="download-pkg" download>دانلود بسته ‎.nxpkg‎</a>
+          </div>
+          <p class="note small">توجه: قالب این بسته یک قرارداد پیشنهادی است و تا زمانی که Importer نکسا ساخته و آزمایش نشده، قابلیت Import آن در محیط عملیاتی تأیید نشده است. پیش از استفاده در سرور اصلی، آن را در محیط آزمایشی بررسی کنید.</p>
+        </div>
+        <div class="card danger-zone">
+          <h2>حذف عملیات و فایل‌های موقت</h2>
+          <p class="muted">فایل ZIP بارگذاری‌شده، داده‌های استخراج‌شده، بسته و کلید این عملیات از این کامپیوتر پاک می‌شود. اگر بسته و کلید را دانلود نکرده‌اید، ابتدا آن‌ها را ذخیره کنید.</p>
+          <button type="button" class="btn btn-danger" id="delete-job" data-testid="delete-job">حذف عملیات و فایل‌های موقت</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 8. History -->
+    <section class="view" id="view-history" data-view-name="history" aria-labelledby="h-history" hidden>
+      <header class="view-head">
+        <div>
+          <h1 id="h-history">تاریخچه</h1>
+          <p class="muted">تاریخچه فقط آمار کلی و بخشی از اثرانگشت فایل را نگه می‌دارد؛ هیچ نام، شناسه، رمز یا مبلغی ذخیره نمی‌شود.</p>
+        </div>
+        <button type="button" class="btn btn-danger btn-sm" id="history-clear" data-testid="history-clear">پاک کردن تاریخچه</button>
+      </header>
+      <div class="card">
+        <div id="history-empty" class="empty" hidden>تاریخچه‌ای ثبت نشده است.</div>
+        <div class="table-wrap">
+          <table class="table" id="history-table" data-testid="history-table">
+            <thead><tr><th scope="col">شروع</th><th scope="col">پایان</th><th scope="col">وضعیت</th><th scope="col">آمادگی</th><th scope="col">حجم</th><th scope="col">نسخه ساختار</th><th scope="col">اثرانگشت</th><th scope="col">مسدودکننده</th><th scope="col">بررسی</th><th scope="col">تعداد رکوردها</th></tr></thead>
+            <tbody id="history-tbody"></tbody>
+          </table>
+        </div>
+        <div class="pager" id="history-pager"></div>
+      </div>
+    </section>
+
+    <!-- 9. Settings -->
+    <section class="view" id="view-settings" data-view-name="settings" aria-labelledby="h-settings" hidden>
+      <header class="view-head">
+        <div>
+          <h1 id="h-settings">تنظیمات امنیت و منابع</h1>
+          <p class="muted">محدودیت‌های امنیتی برای جلوگیری از فایل‌های مخرب (مثل ZIP bomb) و مدیریت فضای دیسک.</p>
+        </div>
+      </header>
+      <form class="card settings-form" id="settings-form" novalidate>
+        <div id="settings-fields"></div>
+        <div class="actions">
+          <button type="submit" class="btn btn-primary" id="settings-save" data-testid="settings-save">ذخیره تنظیمات</button>
+          <button type="button" class="btn btn-ghost" id="settings-defaults">بازگردانی مقادیر پیش‌فرض</button>
+        </div>
+      </form>
+    </section>
+  </main>
+</div>
+
+<dialog id="confirm-dialog" class="dialog" aria-labelledby="confirm-title" aria-describedby="confirm-text">
+  <form method="dialog" id="confirm-form">
+    <h2 id="confirm-title">تأیید</h2>
+    <p id="confirm-text"></p>
+    <div class="actions">
+      <button type="button" class="btn btn-danger" id="confirm-ok" data-testid="confirm-ok">تأیید</button>
+      <button type="button" class="btn btn-ghost" id="confirm-cancel" data-testid="confirm-cancel">انصراف</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="own-plan-dialog" class="dialog dialog-wide" aria-labelledby="own-plan-title" data-testid="own-plan-dialog">
+  <form method="dialog" id="own-plan-form" novalidate>
+    <h2 id="own-plan-title">تأیید اقدام گروهی</h2>
+    <div class="importer-warning" id="own-plan-attest" data-testid="own-plan-attest" role="note" hidden>
+      <strong>این یک تأیید مدیر است و اثبات مالکیت نیست.</strong>
+      <span>فقط مالک ثبت‌شده در فاکتور پذیرفته می‌شود. این سرویس‌ها در همه گزارش‌ها و در خروجی جدا از «مالکیت اثبات‌شده» و با برچسب «تأیید مدیر» نگه داشته می‌شوند.</span>
+    </div>
+    <dl class="kv-grid" id="own-plan-kv" data-testid="own-plan-kv"></dl>
+    <div id="own-plan-noteligible"></div>
+    <div id="own-plan-risks"></div>
+    <div id="own-plan-unreviewed"></div>
+    <p class="field-error" id="own-plan-error" data-testid="own-plan-error" role="alert" hidden></p>
+    <div id="own-plan-confirm">
+      <div class="field">
+        <label for="own-plan-count" id="own-plan-count-label">برای تأیید، تعداد مواردی را که تغییر می‌کنند تایپ کنید</label>
+        <input type="text" id="own-plan-count" data-testid="own-plan-count" inputmode="numeric" dir="ltr" autocomplete="off" spellcheck="false">
+      </div>
+      <label class="check-row" for="own-plan-ack">
+        <input type="checkbox" id="own-plan-ack" data-testid="own-plan-ack">
+        <span id="own-plan-ack-text">پیامد این اقدام را خواندم و آن را تأیید می‌کنم.</span>
+      </label>
+      <div class="own-high-risk" id="own-plan-highrisk" hidden>
+        <p class="bad-text" id="own-plan-highrisk-text"></p>
+        <label class="check-row" for="own-plan-highrisk-ack">
+          <input type="checkbox" id="own-plan-highrisk-ack" data-testid="own-plan-highrisk-ack">
+          <span>تأیید دوم: می‌پذیرم که در این سرویس‌ها کاربر دیگری بدون ثبت انتقال اقدام کرده و مالک ثبت‌شده در فاکتور با وضعیت «تأیید مدیر — اثبات نشده» ثبت می‌شود.</span>
+        </label>
+      </div>
+    </div>
+    <div class="actions">
+      <button type="button" class="btn btn-primary" id="own-plan-commit" data-testid="own-plan-commit" disabled>ثبت نهایی</button>
+      <button type="button" class="btn btn-secondary" id="own-plan-replan" data-testid="own-plan-replan" hidden>برنامه‌ریزی دوباره</button>
+      <button type="button" class="btn btn-ghost" id="own-plan-cancel" data-testid="own-plan-cancel">انصراف</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="own-seal-dialog" class="dialog" aria-labelledby="own-seal-title" data-testid="own-seal-dialog">
+  <form method="dialog" id="own-seal-form" novalidate>
+    <h2 id="own-seal-title">مهر و موم تصمیم‌های مالکیت</h2>
+    <p id="own-seal-text"></p>
+    <div class="field">
+      <label for="own-seal-word">برای تأیید، کلمه SEAL را تایپ کنید</label>
+      <input type="text" id="own-seal-word" data-testid="own-seal-word" dir="ltr" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="field">
+      <label for="own-seal-count" id="own-seal-count-label">تعداد کل سرویس‌ها</label>
+      <input type="text" id="own-seal-count" data-testid="own-seal-count" inputmode="numeric" dir="ltr" autocomplete="off" spellcheck="false">
+    </div>
+    <p class="field-error" id="own-seal-error" role="alert" hidden></p>
+    <div class="actions">
+      <button type="button" class="btn btn-warn" id="own-seal-ok" data-testid="own-seal-ok" disabled>مهر و موم</button>
+      <button type="button" class="btn btn-ghost" id="own-seal-cancel">انصراف</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="own-detail" class="dialog dialog-wide own-drawer" aria-labelledby="own-detail-title" data-testid="own-detail">
+  <div class="card-head">
+    <h2 id="own-detail-title">جزئیات سرویس</h2>
+    <button type="button" class="icon-btn" id="own-detail-close" data-testid="own-detail-close" aria-label="بستن جزئیات">×</button>
+  </div>
+  <div id="own-detail-body"></div>
+</dialog>
+</body>
+</html>

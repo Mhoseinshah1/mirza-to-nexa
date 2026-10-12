@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,build]"
+      - name: Lint
+        run: ruff check src tests packaging
+      - name: Unit / integration / security tests
+        run: pytest -q
+      - name: Browser end-to-end tests (synthetic data)
+        run: |
+          python -m playwright install --with-deps chromium
+          pytest -q -m e2e
+      - name: Synthetic performance test (200k customers)
+        run: pytest -q -m perf -s
+      - name: Build Linux executable (packaging regression check)
+        run: pyinstaller --noconfirm --clean packaging/mirza2nexa.spec
+      - name: Smoke test Linux executable
+        run: python packaging/smoke_test.py dist/Mirza2Nexa/Mirza2Nexa
+      - name: Executable end-to-end (synthetic; exe vs python, determinism)
+        run: python packaging/exe_e2e.py dist/Mirza2Nexa/Mirza2Nexa --users 3000
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,build]"
+      - name: Tests on Windows
+        run: pytest -q
+      - name: Build Windows executable
+        run: pyinstaller --noconfirm --clean packaging/mirza2nexa.spec
+      - name: Smoke test executable
+        run: python packaging/smoke_test.py dist/Mirza2Nexa/Mirza2Nexa.exe
+      - name: Executable end-to-end (synthetic; exe vs python, determinism)
+        run: python packaging/exe_e2e.py dist/Mirza2Nexa/Mirza2Nexa.exe --users 3000
+      - name: Read version
+        shell: pwsh
+        run: |
+          $v = python -c "import mirza2nexa;print(mirza2nexa.__version__)"
+          if (-not $v) { throw "could not read mirza2nexa version" }
+          echo "M2N_VERSION=$v" >> $env:GITHUB_ENV
+      - name: Package
+        shell: pwsh
+        run: Compress-Archive -Path dist/Mirza2Nexa -DestinationPath "Mirza2Nexa-windows-x64-v$env:M2N_VERSION.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Mirza2Nexa-windows-x64-v${{ env.M2N_VERSION }}
+          path: Mirza2Nexa-windows-x64-v${{ env.M2N_VERSION }}.zip
+          retention-days: 14
