@@ -58,6 +58,8 @@ class Column:
     type: str  # raw type text, lowercased, e.g. "bigint(20) unsigned", "varchar(500)"
     nullable: bool
     default: str | None  # raw SQL text of the DEFAULT expression; None if absent or DEFAULT NULL
+    charset: str | None = None  # column-level CHARACTER SET / CHARSET clause, lowercased
+    collation: str | None = None  # column-level COLLATE clause, lowercased
 
 
 @dataclass(frozen=True)
@@ -66,6 +68,11 @@ class TableDef:
     columns: tuple[Column, ...]
     primary_key: tuple[str, ...]
     unique_keys: tuple[tuple[str, ...], ...]
+    # Table options after the column list (``ENGINE=… DEFAULT CHARSET=… COLLATE=…``), as dumped
+    # (engine verbatim, charset/collation lowercased); None when the dump does not state them.
+    engine: str | None = None
+    charset: str | None = None
+    collation: str | None = None
 
     def column_names(self) -> tuple[str, ...]:
         return tuple(c.name for c in self.columns)
@@ -956,7 +963,8 @@ class DumpReader:
         if pk:
             pkset = set(pk)
             columns = [replace(c, nullable=False) if c.name in pkset else c for c in columns]
-        tdef = TableDef(name, tuple(columns), pk, tuple(uniques))
+        engine, charset, collation = _table_options(toks[close + 1 :])
+        tdef = TableDef(name, tuple(columns), pk, tuple(uniques), engine, charset, collation)
         self.tables[name] = tdef
         return TableEvent(tdef)
 
@@ -999,10 +1007,23 @@ class DumpReader:
         default: str | None = None
         is_pk = False
         is_unique = False
+        charset: str | None = None
+        collation: str | None = None
         n = len(part)
         while i < n:
             kind, raw, _ = part[i]
             up = raw.upper() if kind == "word" else b""
+            if up in (b"CHARSET", b"CHARACTER", b"COLLATE"):
+                j = i + 2 if up == b"CHARACTER" and i + 1 < n and part[i + 1][1].upper() == b"SET" else i + 1
+                if up == b"CHARACTER" and j == i + 1:
+                    i += 1
+                    continue
+                value, i = _option_value(part, j)
+                if up == b"COLLATE":
+                    collation = value
+                else:
+                    charset = value
+                continue
             if up == b"NOT" and i + 1 < n and part[i + 1][1].upper() == b"NULL":
                 nullable = False
                 i += 2
@@ -1022,7 +1043,7 @@ class DumpReader:
                 i = close + 1 if close >= 0 else n
                 continue
             i += 1
-        return Column(name, type_text, nullable, default), is_pk, is_unique
+        return Column(name, type_text, nullable, default, charset, collation), is_pk, is_unique
 
     # ------------------------------------------------------------------ ALTER TABLE
 
@@ -1075,7 +1096,7 @@ class DumpReader:
         if pk != tdef.primary_key or tuple(uniques) != tdef.unique_keys:
             pkset = set(pk)
             cols2 = tuple(replace(c, nullable=False) if c.name in pkset else c for c in tdef.columns)
-            new = TableDef(tdef.name, cols2, pk, tuple(uniques))
+            new = replace(tdef, columns=cols2, primary_key=pk, unique_keys=tuple(uniques))
             self.tables[name] = new
             yield TableEvent(new)
 
@@ -1120,6 +1141,48 @@ def _raw_join(toks: list[Token]) -> str:
         text = raw.decode("utf-8", "replace")
         out.append(text if kind in ("sq", "dq", "bq") else text.lower())
     return "".join(out)
+
+
+def _option_value(toks: list[Token], i: int) -> tuple[str | None, int]:
+    """Value of ``OPTION [=] value`` starting at ``toks[i]`` (lowercased, quotes removed)."""
+    if i < len(toks) and toks[i][0] == "p" and toks[i][1] == b"=":
+        i += 1
+    if i >= len(toks):
+        return None, i
+    kind, raw, _ = toks[i]
+    if kind in ("sq", "dq", "bq"):
+        raw = raw[1:-1]
+    elif kind != "word":
+        return None, i + 1
+    return raw.decode("utf-8", "replace").lower(), i + 1
+
+
+def _table_options(toks: list[Token]) -> tuple[str | None, str | None, str | None]:
+    """``(engine, charset, collation)`` from the table options after ``CREATE TABLE … (…)``."""
+    engine = charset = collation = None
+    i, n = 0, len(toks)
+    while i < n:
+        kind, raw, _ = toks[i]
+        up = raw.upper() if kind == "word" else b""
+        if up in (b"PARTITION", b"AS", b"SELECT"):
+            break
+        if up in (b"ENGINE", b"TYPE"):
+            j = i + 1
+            if j < n and toks[j][0] == "p" and toks[j][1] == b"=":
+                j += 1
+            if j < n and toks[j][0] in ("word", "sq", "dq", "bq"):
+                r = toks[j][1]
+                engine = (r[1:-1] if toks[j][0] != "word" else r).decode("utf-8", "replace")
+            i = j + 1
+            continue
+        if up == b"CHARSET" or (up == b"CHARACTER" and i + 1 < n and toks[i + 1][1].upper() == b"SET"):
+            charset, i = _option_value(toks, i + (2 if up == b"CHARACTER" else 1))
+            continue
+        if up == b"COLLATE":
+            collation, i = _option_value(toks, i + 1)
+            continue
+        i += 1
+    return engine, charset, collation
 
 
 def _default_expr(part: list[Token], i: int) -> tuple[str | None, int]:

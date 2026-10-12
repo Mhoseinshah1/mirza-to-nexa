@@ -149,8 +149,12 @@ def test_full_flow_encrypted_backup(app_client, tmp_path):
 
     pkg = client.get(f"/api/jobs/{job['id']}/download")
     assert pkg.status_code == 200 and pkg.content.startswith(b"NXPKG\x00")
+    short = rep["import_id"][:12]
+    # «فایل بکاپ NEXA برای بازیابی از میرزا»: one stem for the package and its key
+    assert f'filename="nexa-restore-mirza-{short}.nxpkg"' in pkg.headers["content-disposition"]
     key = client.get(f"/api/jobs/{job['id']}/key")
     assert key.status_code == 200 and key.text.startswith("nxkey1:")
+    assert key.headers["content-disposition"] == f'attachment; filename="nexa-restore-mirza-{short}.nxkey"'
 
     # history is non-sensitive
     hist = read_history()

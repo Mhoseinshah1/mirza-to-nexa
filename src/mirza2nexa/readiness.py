@@ -1,9 +1,15 @@
-"""Migration readiness report: what an owner needs to decide whether the NEXA import can start.
+"""Migration readiness report: what an owner needs to decide whether the NEXA restore can start.
 
 Built only from aggregates already in ``report.json`` plus the review taxonomy, so it carries
 no customer identifiers, usernames, codes, payment details or raw text. ``ready`` in the
-package means *ready for importer review*; it is never an import permission — the verdict
-here says so explicitly.
+package means *ready for a restore on a NEXA test installation*; it is never a production
+restore permission — the verdict here says so explicitly.
+
+The package is restored in NEXA's Web Admin («بکاپ و بازیابی ← عملیات بازیابی»), which checks it
+before anything is written. That restore path exists only in a NEXA version still under review
+(nexa-bot draft PR #278, unreleased), so ``NEXA_RESTORE_PATH_UNRELEASED`` stays an import blocker:
+a verdict can at best say "restore on a test installation", never "restore in production". The
+blocker is removed in the release that ships against a released NEXA version, not before.
 """
 
 from __future__ import annotations
@@ -12,7 +18,9 @@ from typing import Any
 
 from . import __version__
 
-READINESS_VERSION = "1.0.0"
+#: 1.1.0: ``IMPORTER_NOT_BUILT`` replaced by ``NEXA_RESTORE_PATH_UNRELEASED`` (same position, still
+#: blocking); verdict codes unchanged.
+READINESS_VERSION = "1.1.0"
 
 
 def _sec(report: dict[str, Any], name: str) -> dict[str, Any]:
@@ -142,8 +150,10 @@ def build(report: dict[str, Any], taxonomy: dict[str, Any], *, package_contract_
 
     # ---- import blockers & verdict --------------------------------------------------------
     blockers = report.get("blockers") or []
-    import_blockers = [{"code": "IMPORTER_NOT_BUILT",
-                        "message_fa": "Importer سمت NEXA هنوز ساخته و تست نشده است؛ Import عملیاتی ممکن نیست."}]
+    import_blockers = [{"code": "NEXA_RESTORE_PATH_UNRELEASED",
+                        "message_fa": "بازیابی این فایل از «بکاپ و بازیابی ← عملیات بازیابی» در نسخه‌ای از NEXA است "
+                                      "که هنوز در حال بررسی است و منتشر نشده؛ فعلاً فقط روی نصب آزمایشی NEXA، "
+                                      "نه سرور اصلی."}]
     if report.get("readiness") != "ready":
         import_blockers.append({"code": "PACKAGE_BLOCKED",
                                 "message_fa": "بسته دارای مسدودکننده است و باید ابتدا رفع شود."})
@@ -163,10 +173,10 @@ def build(report: dict[str, Any], taxonomy: dict[str, Any], *, package_contract_
         verdict = {"code": "BLOCKED", "label_fa": "مسدود — بسته باید اصلاح شود"}
     elif blocking_decisions or review_blocker_items or not amounts_valid:
         verdict = {"code": "NOT_READY_FOR_IMPORT",
-                   "label_fa": "بسته برای بررسی Importer آماده است، اما برای Import عملیاتی آماده نیست"}
+                   "label_fa": "فایل از نظر ساختار سالم است، اما تا تعیین تکلیف موارد زیر برای بازیابی آماده نیست"}
     else:
         verdict = {"code": "READY_FOR_IMPORTER_DRY_RUN",
-                   "label_fa": "آماده اجرای آزمایشی (Dry Run) پس از ساخت Importer؛ Import عملیاتی نیاز به تأیید جداگانه دارد"}
+                   "label_fa": "آماده بازیابی آزمایشی در NEXA (فقط نصب آزمایشی)؛ بازیابی روی سرور اصلی نیاز به نسخه منتشرشده NEXA و تأیید جداگانه دارد"}
     verdict["reasons"] = [{"code": b["code"], "message_fa": b["message_fa"]} for b in import_blockers]
 
     by_act = taxonomy.get("by_actionability") or {}
@@ -181,7 +191,7 @@ def build(report: dict[str, Any], taxonomy: dict[str, Any], *, package_contract_
             "blockers": [{"code": b.get("code"), "message_fa": b.get("message"), "count": b.get("count")}
                          for b in blockers],
             "catalogue_ok": bool((report.get("catalogue") or {}).get("ok", False)),
-            "ready_means": "ready for importer review only — not an import permission",
+            "ready_means": "ready for a restore on a NEXA test installation only — not a production restore permission",
         },
         "financial": {
             "balanced": bool(wallet.get("balanced")),

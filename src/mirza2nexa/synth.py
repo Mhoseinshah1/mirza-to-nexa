@@ -17,6 +17,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 TG_BASE = 7_000_000_000
+#: Written into NEXA's marker table ``nexa_synthetic_fixture`` (source-port.ts:121-122) so the
+#: package's source snapshot says it is synthetic (``source/catalog.json.synthetic_marker``).
+SYNTHETIC_LABEL = "SYNTHETIC mirza2nexa fixture v1 (not evidence)"
 
 HEADER = """-- MySQL dump 10.13  Distrib 8.0.36, for Linux (x86_64)
 --
@@ -31,7 +34,7 @@ DDL_USER = """DROP TABLE IF EXISTS `user`;
 CREATE TABLE `user` (
   `id` varchar(500) NOT NULL,
   `limit_usertest` int(100) NOT NULL,
-  `Balance` int(255) NOT NULL,
+  `Balance` varchar(64) NOT NULL,
   `number` varchar(2000) DEFAULT NULL,
   `User_Status` varchar(500) DEFAULT NULL,
   `agent` varchar(100) DEFAULT NULL,
@@ -250,6 +253,10 @@ def write_dump(out, spec: SynthSpec) -> dict[str, int]:
 
         for _order, _name, hook in list(_SYNTH_HOOKS):
             hook(out, state)
+    out.write("DROP TABLE IF EXISTS `nexa_synthetic_fixture`;\n"
+              "CREATE TABLE `nexa_synthetic_fixture` (`label` varchar(200) NOT NULL) "
+              "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;\n"
+              f"INSERT INTO `nexa_synthetic_fixture` (`label`) VALUES ({_sql_str(SYNTHETIC_LABEL)});\n")
     out.write("-- Dump completed on 2026-10-01 10:00:00\n")
     return exp
 

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from . import CONVERTER_NAME, __version__
-from .archive import ArchiveLimits, extract_sql, inspect_archive
+from .archive import ArchiveLimits, _check_disk, extract_sql, inspect_archive
 from .convert import BLOCKER_MESSAGES, MAPPING_VERSION, WARNING_MESSAGES, Converter
 from .diff import diff_records
 from .nxpkg import PackageWriter, generate_key_file
@@ -112,7 +112,7 @@ def _cleanup_plaintext(workspace: Path) -> None:
 
     for name in ("sql", "stage", "out"):
         shutil.rmtree(workspace / name, ignore_errors=True)
-    for name in ("staging.sqlite", "staging.sqlite-journal", "diff.sqlite"):
+    for name in ("staging.sqlite", "staging.sqlite-journal", "diff.sqlite", "snapshot.sqlite"):
         (workspace / name).unlink(missing_ok=True)
 
 
@@ -171,12 +171,24 @@ def _convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
     stage("schema", None)
     db_path = workspace / "staging.sqlite"
     db_path.unlink(missing_ok=True)
-    staged = stage_dumps([e.path for e in extracted], db_path, cancel=cancel, progress=progress)
-    if opts.delete_sql_after_parse:
-        for e in extracted:
-            e.path.unlink(missing_ok=True)
-    profile = detect_profile(staged.tables)
-    fingerprint = source_fingerprint(staged.tables, profile)
+    # Raw source snapshot (contract 1.4.0): collected in the same single parse as staging.
+    from .source_snapshot import SnapshotCollector
+
+    snapshot = SnapshotCollector(workspace / "snapshot.sqlite")
+    snapshot.disk_check = lambda: _check_disk(workspace, 0, opts.limits.min_free_disk_margin)
+    # Any failure before the snapshot is written (staging, schema detection) must release the
+    # SQLite handle first: Windows cannot delete an open file during plaintext cleanup.
+    try:
+        staged = stage_dumps([e.path for e in extracted], db_path, cancel=cancel, progress=progress,
+                             observer=snapshot)
+        if opts.delete_sql_after_parse:
+            for e in extracted:
+                e.path.unlink(missing_ok=True)
+        profile = detect_profile(staged.tables)
+        fingerprint = source_fingerprint(staged.tables, profile)
+    except BaseException:
+        snapshot.close()
+        raise
     import_id = _import_id(fingerprint, opts.money_unit)
 
     stage("convert", None)
@@ -205,11 +217,18 @@ def _convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
         sinks[rel] = _SchemaSink(writer.open_jsonl(rel))
         return sinks[rel]
 
+    try:
+        snap = snapshot.write(writer, cancel=cancel)
+    finally:
+        snapshot.close()
+
     conv = Converter(db_path, staged.tables, profile, fingerprint, open_jsonl, money_unit=opts.money_unit,
                      cancel=cancel, progress=progress, ref_key=ref_key)
     outcome = conv.run()
     if staged.unrepresentable_cells:
         outcome.block("UNREPRESENTABLE_CELLS", staged.unrepresentable_cells)
+    for code, n in sorted(snap.blockers.items()):
+        outcome.block(code, n)
     for name in ("records/customers.jsonl", "records/wallet_opening_balances.jsonl", "records/legacy_debts.jsonl"):
         if name in sinks:
             sinks[name].close()
@@ -283,6 +302,8 @@ def _convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
             "encryption": insp.encryption,
             "sql_files": [{"entry": e.entry_name, "bytes": e.size, "sha256": e.sha256} for e in extracted],
             "parser_warnings": staged.warnings,
+            "snapshot": {"synthetic_marker": snap.synthetic_marker, "engine_hint": snap.catalog["engine_hint"],
+                         "tables": len(snap.catalog["tables"]), "rows_written": snap.table_files},
             "tables": {n: {"rows": t.rows, "columns": list(t.columns), "classified": t.classified,
                            "never_read_columns_present": list(t.never_read_present)}
                        for n, t in sorted(staged.tables.items())},
@@ -355,7 +376,7 @@ def _convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
                           "verified_by_importer": False},
         "record_counts": {k: v.get("converted", 0) for k, v in sorted(outcome.counts.items())},
     }
-    pkg_path = out_dir / f"nexa-migration-{import_id[:12]}.nxpkg"
+    pkg_path = out_dir / f"nexa-restore-mirza-{import_id[:12]}.nxpkg"
     result = writer.finalize(pkg_path, manifest=manifest, cancel=cancel, progress=progress, kdf_n=opts.kdf_n,
                              **secret)
     secret.clear()

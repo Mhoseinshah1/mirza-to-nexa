@@ -26,13 +26,13 @@ EVIL = '<script>alert("x")</script>'
 
 # Synthetic readiness document covering every documented key (aggregates only).
 FIXTURE: dict = {
-    "readiness_version": "1.0.0",
+    "readiness_version": "1.1.0",
     "converter_version": "0.3.0",
     "package_contract_version": "1.1.0",
     "import_id": "imp-abcdef",
     "generated_at": "2026-10-10T08:00:00Z",
     "verdict": {"code": "NOT_READY_FOR_IMPORT", "label_fa": "آماده Import نیست",
-                "reasons": [{"code": "IMPORTER_NOT_BUILT", "message_fa": "Importer ساخته نشده است."}]},
+                "reasons": [{"code": "NEXA_RESTORE_PATH_UNRELEASED", "message_fa": "مسیر بازیابی NEXA منتشر نشده است."}]},
     "package_health": {"readiness": "ready", "blockers": [{"code": "MONEY_UNIT_UNCONFIRMED",
                                                           "message_fa": "واحد پول تأیید نشده", "count": 1}],
                        "catalogue_ok": True},
@@ -57,7 +57,7 @@ FIXTURE: dict = {
                "auto_resolved_with_evidence": 7, "owner_decisions_needed": 3, "adoption_stage": 12},
     "owner_decisions": [{"id": "OD-MONEY-UNIT", "title_fa": "تأیید واحد پول", "detail_fa": "جزئیات", "blocking": True},
                         {"id": "OD-OPEN-TICKETS", "title_fa": "تیکت‌های باز", "detail_fa": "", "blocking": False}],
-    "import_blockers": [{"code": "IMPORTER_NOT_BUILT", "message_fa": "Importer نکسا ساخته نشده است."}],
+    "import_blockers": [{"code": "NEXA_RESTORE_PATH_UNRELEASED", "message_fa": "مسیر بازیابی NEXA منتشر نشده است."}],
 }
 
 
@@ -98,9 +98,9 @@ def test_render_fixture_is_persian_rtl_and_complete():
     assert "<script" not in out.lower() and "<link" not in out.lower() and out.count("<style>") == 1
     assert report_fa.READINESS_DISCLAIMER_FA in out
     for text in ("سلامت بسته", "تطبیق مالی", "پوشش جدول‌ها", "مالکیت سرویس‌ها", "نگاشت پنل‌ها",
-                 "موارد بررسی", "تصمیم‌های لازم مالک", "موانع Import", "mystery_table",
+                 "موارد بررسی", "تصمیم‌های لازم مالک", "موانع بازیابی", "mystery_table",
                  "موجودی پیش از شروع تاریخچه", "NEW_CAUSE_X", "در انتظار نگاشت توسط مالک",
-                 "اختلاف تاریخچه مالی", "تأیید واحد پول", "IMPORTER_NOT_BUILT", "تومان"):
+                 "اختلاف تاریخچه مالی", "تأیید واحد پول", "NEXA_RESTORE_PATH_UNRELEASED", "تومان"):
         assert text in out, text
 
 
@@ -230,3 +230,26 @@ def test_labels_cover_producer_codes():
 
     assert set(DECISIONS) <= set(report_fa.OWNERSHIP_DECISION_FA)
     assert set(CAUSES) <= set(report_fa.HISTORY_CAUSE_FA)
+
+
+def test_ui_copy_describes_the_nexa_restore_path_not_a_missing_importer():
+    """v0.7.0: the output is «فایل بکاپ NEXA برای بازیابی از میرزا», restored from NEXA's
+    «بکاپ و بازیابی ← عملیات بازیابی»; no screen or report may still say the importer is not built."""
+    from pathlib import Path
+
+    import mirza2nexa
+
+    static = Path(mirza2nexa.__file__).parent / "web" / "static"
+    texts = {f.name: f.read_text(encoding="utf-8") for f in static.iterdir() if f.suffix in {".html", ".js"}}
+    texts["labels"] = json.dumps(report_fa.labels_payload(), ensure_ascii=False)
+    texts["readiness.html"] = render_readiness_html(FIXTURE)
+    for name, text in texts.items():
+        for stale in ("ساخته نشده", "IMPORTER_NOT_BUILT", "Importer نکسا", "data-testid=\"importer-warning\""):
+            assert stale not in text, (name, stale)
+    note = report_fa.NEXA_RESTORE_NOTE_FA
+    for phrase in ("فایل بکاپ NEXA برای بازیابی از میرزا", "بکاپ و بازیابی", "عملیات بازیابی", "بکاپ محافظ",
+                   "منتشر نشده", "نصب آزمایشی"):
+        assert phrase in note, phrase
+    assert note in texts["readiness.html"]
+    assert 'data-testid="restore-steps"' in texts["index.html"]
+    assert set(report_fa.IMPORT_BLOCKER_FA) >= {"NEXA_RESTORE_PATH_UNRELEASED"}

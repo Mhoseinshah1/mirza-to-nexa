@@ -72,6 +72,9 @@ BLOCKER_MESSAGES: dict[str, str] = {
     "SERVICE_ACCOUNTING_MISMATCH": "تعداد سرویس‌های خروجی با تعداد فاکتورهای فعال بکاپ برابر نیست.",
     "SOURCE_RECOUNT_MISMATCH": "بازشماری مستقل مبالغ از بکاپ با مبالغ خروجی برابر نیست.",
     "TABLE_DEFINED_TWICE": "یک جدول در چند فایل SQL تعریف شده است؛ ادغام خودکار انجام نمی‌شود.",
+    "SOURCE_SNAPSHOT_BINARY_COLUMN": "یکی از ستون‌هایی که NEXA از جدول‌های user/invoice/product می‌خواند در بکاپ از نوع باینری است؛ مقدار متنی آن قابل اثبات نیست و بسته مسدود است.",
+    "SOURCE_SNAPSHOT_VALUE_UNREPRESENTABLE": "برخی مقادیر جدول‌های user/invoice/product با نوع ستونشان سازگار نیستند و متنی که MySQL برمی‌گرداند قابل اثبات نیست؛ بسته مسدود است.",
+    "SOURCE_SNAPSHOT_KEY_INVALID": "کلید اصلی خالی یا تکراری در جدول‌های user/invoice/product؛ بسته مسدود است.",
 }
 
 WARNING_MESSAGES: dict[str, str] = {

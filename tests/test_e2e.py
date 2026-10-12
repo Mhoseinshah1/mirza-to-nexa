@@ -232,10 +232,11 @@ def test_full_happy_path_encrypted(ui, server, tmp_path):
     page.click("[data-testid=nav-download]")
     page.wait_for_selector("[data-testid=download-pkg][href]", state="visible")
     name, data = read_download(page, "download-pkg")
-    assert name.endswith(".nxpkg"), name
+    assert re.fullmatch(r"nexa-restore-mirza-[0-9a-f]{12}\.nxpkg", name), name
     assert data.startswith(b"NXPKG\x00")
     page.wait_for_selector("[data-testid=download-key][href]", state="visible")
-    _, key = read_download(page, "download-key")
+    key_name, key = read_download(page, "download-key")
+    assert key_name == name[: -len(".nxpkg")] + ".nxkey", key_name
     assert key.decode("utf-8").startswith("nxkey1:")
 
     # history (UI and on disk)
@@ -322,7 +323,7 @@ def test_foreign_host_and_origin_rejected(server):
 
 def test_coverage_page_package_preview_and_persian_reports(ui, server, tmp_path):
     """Phase 2 pages: coverage table with an uncatalogued (hostile-named) table, Persian HTML
-    report and coverage CSV downloads, and the full package preview with the importer warning."""
+    report and coverage CSV downloads, and the full package preview with the NEXA restore steps."""
     import io
     import zipfile
 
@@ -384,8 +385,13 @@ def test_coverage_page_package_preview_and_persian_reports(ui, server, tmp_path)
     page.click("[data-testid=nav-download]")
     page.wait_for_selector("[data-testid=package-preview]:not([hidden]) [data-testid=package-files] tbody tr")
     assert page.text_content("[data-testid=contract-version]") == PACKAGE_SCHEMA_VERSION
-    warn = page.locator("[data-testid=importer-warning]")
-    assert warn.is_visible() and "Importer" in (warn.text_content() or "")
+    steps = page.locator("[data-testid=restore-steps]")
+    assert steps.is_visible() and steps.locator("ol > li").count() == 6
+    steps_text = steps.text_content() or ""
+    for phrase in ("بکاپ و بازیابی", "عملیات بازیابی", "بررسی", "تأیید بازیابی", "بکاپ محافظ", "منتشر نشده"):
+        assert phrase in steps_text, phrase
+    assert "فایل بکاپ NEXA" in (page.text_content("#h-download") or "")
+    assert "Importer" not in (page.text_content("#view-download") or "")
     assert page.locator("[data-testid=package-files] tbody tr[data-path='records/customers.jsonl']").count() == 1
     probs.assert_clean()
 
@@ -410,13 +416,13 @@ def test_migration_readiness_page_and_downloads(ui, server, tmp_path):
     code = verdict.get_attribute("data-verdict")
     assert code in {"NOT_READY_FOR_IMPORT", "READY_FOR_IMPORTER_DRY_RUN", "BLOCKED"}, code
     assert PERSIAN.search(verdict.text_content() or "")
-    assert "مجوز Import نیست" in (verdict.text_content() or "")
+    assert "مجوز بازیابی روی سرور اصلی نیست" in (verdict.text_content() or "")
     assert page.is_visible("[data-testid=readiness-disclaimer]")
     for tid in ("readiness-financial", "readiness-coverage", "readiness-ownership", "readiness-panels",
                 "readiness-review-groups", "readiness-owner-decisions", "readiness-import-blockers"):
         assert page.is_visible(f"[data-testid={tid}]"), tid
         assert PERSIAN.search(page.text_content(f"[data-testid={tid}]") or ""), tid
-    blockers = page.locator("[data-testid=readiness-import-blockers] li[data-code=IMPORTER_NOT_BUILT]")
+    blockers = page.locator("[data-testid=readiness-import-blockers] li[data-code=NEXA_RESTORE_PATH_UNRELEASED]")
     assert blockers.count() == 1
     assert page.locator("[data-testid=readiness-owner-decisions] li[data-decision]").count() >= 1
 

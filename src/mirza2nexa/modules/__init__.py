@@ -47,6 +47,9 @@ EXPECTED_TABLES: frozenset[str] = frozenset({
     "vs_order", "vs_package", "vs_setting", "vs_stock", "wallet_transaction", "wheel_list",
 })
 
+#: Catalogued tables that are not Mirza tables: NEXA's synthetic-dataset marker (core_specs.py).
+TOOLING_TABLES: frozenset[str] = frozenset({"nexa_synthetic_fixture"})
+
 
 class CatalogueIncomplete(MigrationError):
     code = "catalogue.incomplete"
@@ -77,5 +80,5 @@ def verify_registry() -> dict:
     return status
 
 
-__all__ = ["EXPECTED_MODULES", "EXPECTED_TABLES", "CatalogueIncomplete", "Module", "ModuleContext",
+__all__ = ["EXPECTED_MODULES", "EXPECTED_TABLES", "TOOLING_TABLES", "CatalogueIncomplete", "Module", "ModuleContext",
            "modules_in_order", "register_module", "registry_status", "verify_registry"]

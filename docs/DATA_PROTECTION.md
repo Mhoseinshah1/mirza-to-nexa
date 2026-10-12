@@ -113,6 +113,11 @@ cannot make an unknown column safe, which is why unknown columns are never stage
   secret columns, secret and unknown keys of key-value tables, and the ZIP password. The package
   key appears only in the key download (`/api/jobs/{id}/key`) and is never written into the package,
   report or history.
+* **Raw source snapshot** (contract 1.4.0, `PACKAGE_CONTRACT.md` §"Source snapshot"): the allowlisted
+  columns of `user`, `invoice` and `product` as raw text, including personal cells the records minimise
+  (`user.number`, `invoice.note`, `invoice.refral`, usernames), because NEXA's importer re-decides from them.
+  They exist only inside the encrypted payload and the job's `stage/source/`. The allowlist can never contain
+  a secret column (`source_snapshot.assert_allowlist_safe`); every other column of the row is dropped on read.
 * **Reports, review items and coverage** carry codes, counts, table, column and key *names*, and
   record identifiers. They never carry credential values.
 * **History** (`jobs.read_history`) keeps aggregates only: counts, a 12-character fingerprint
@@ -137,6 +142,7 @@ checks the same for every column EVJ marks secret, in every table of every modul
 | Uploaded ZIP | job workspace | until the job is deleted or the app exits; stale workspaces are swept after 2 hours (`jobs.sweep_stale_workspaces`) |
 | Extracted SQL | `workspace/sql` | deleted right after parsing (`delete_sql_after_parse`, on by default) |
 | Staging SQLite | `workspace/staging.sqlite` | deleted at the end of each run, and on failure (`pipeline._cleanup_plaintext`) |
+| Snapshot sort SQLite | `workspace/snapshot.sqlite` | deleted as soon as `source/tables/*.jsonl` are written, and on failure |
 | Plaintext records (`stage/`) | job workspace | kept for UI preview and backup-to-backup diff; deleted with the job |
 | `.nxpkg` | job workspace and the user's download | encrypted (AES-256-GCM STREAM); kept as the operator decides |
 | History | app home `history.json` | aggregates only; bounded by `history_limit`; can be cleared from the UI |
@@ -144,7 +150,8 @@ checks the same for every column EVJ marks secret, in every table of every modul
 Minimisation rules:
 
 * Only columns a NEXA entity or an operator decision needs are staged.
-* Phone numbers are reduced to a class.
+* Phone numbers are reduced to a class in the records (the raw source snapshot keeps `user.number` for
+  NEXA's own classification; see §5).
 * Logs, caches and secret-only tables are excluded and counted.
 
 ## 7. Proposed access policy for the NEXA archives

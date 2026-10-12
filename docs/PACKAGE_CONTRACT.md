@@ -1,4 +1,4 @@
-# `.nxpkg` content contract: package schema `nexa.migration.mirza` 1.3.0
+# `.nxpkg` content contract: package schema `nexa.migration.mirza` 1.4.0
 
 The container format, meaning the encryption, chunking and checksums, is described in `NXPKG_FORMAT.md` and has
 not changed. This document covers the **content**: which files and records a package holds, and what an
@@ -11,12 +11,27 @@ importer may and may not do with each of them.
 | 1.0.0 | Phase 1: customers, opening balances, debts, products, categories, invoices, services, panels, review queue | — |
 | 1.1.0 | Phase 2, additions only: archive and history files, configuration files, `reports/coverage.json`, a `schema` field on every record | A 1.0 reader that ignores unknown files and fields keeps working |
 | 1.3.0 | Additions only: `records/panel_target_mapping.jsonl` (operator-selected NEXA target panel type, RickPanel) and `reconciliation.panel_targets` | A 1.2 reader that ignores unknown files keeps working; absence means "no target selected", never "Marzban" |
+| 1.4.0 | Additions only: the **raw source snapshot** `source/catalog.json` + `source/tables/{user,invoice,product}.jsonl` (§"Source snapshot"), so NEXA's existing legacy importer can read the package through `LegacySourceSession` unchanged; three blocker codes `SOURCE_SNAPSHOT_*`; `report.source.snapshot` | A 1.3 reader that ignores unknown files keeps working. The NEXA `.nxpkg` importer requires `>= 1.4.0` and refuses a package without the snapshot (`NXPKG_SOURCE_SNAPSHOT_MISSING`) |
 | 1.2.0 | Phase 3, additions only: service ownership, wallet difference analysis, panel/product mapping inputs, agent state, migration readiness and review taxonomy reports (marked *added in 1.2.0* below); three more catalogued fork tables (`botsaz_help` → `records/archive/`, `global_hidden_gateways` and `ai_business_chat` EXCLUDED); `help_category` rows now archived (secret-named columns dropped) | A 1.1 reader that ignores unknown files and fields keeps working. An importer that *consumes* 1.2 files must check `package_schema_version >= 1.2.0` and treat their absence in older packages as "not available", never as "empty" |
 
 The rules:
 * A **minor** bump only adds files or fields.
 * A **major** bump changes or removes something; readers reject an unknown major version.
 * Each record schema is versioned on its own (`schema: "<name>.v<N>"`).
+
+## How NEXA consumes the package (converter 0.7.0)
+
+The converter calls its output «فایل بکاپ NEXA برای بازیابی از میرزا» and names it
+`nexa-restore-mirza-<import_id[:12]>.nxpkg`, with the key beside it as `nexa-restore-mirza-<import_id[:12]>.nxkey`
+(the content and the container are unchanged; a reader must not depend on the file name). In NEXA it is
+restored from the Web Admin «بکاپ و بازیابی ← عملیات بازیابی» as a second restore source: the operator chooses
+the file, presses «بررسی» and gives the key file or passphrase; NEXA verifies the package and shows the panel
+mapping, ownership and dry-run counts before anything is written; «تأیید بازیابی» then takes a protective backup,
+freezes writes, imports through the existing nxpkg migration engine, reconciles and takes a backup. It is not a
+`.nxb`: a `.nxb` is encrypted under the installation's own key and replaces the whole database. That restore path
+is in nexa-bot draft PR #278 — **under review, not released** — so for now only a test installation restores a
+package, and `reports/migration-readiness.json` (readiness 1.1.0) keeps the import blocker
+`NEXA_RESTORE_PATH_UNRELEASED` (it replaced `IMPORTER_NOT_BUILT`).
 
 ## Fields every record has
 
@@ -111,6 +126,102 @@ the record itself and refuses unknown values (gate G5).
 * `mirza2nexa schema BACKUP.zip -o schema.json` exports table/column structure and row counts (no values, no
   defaults) so a fork's tables can be catalogued without sharing the backup.
 
+## Source snapshot (*added in 1.4.0*)
+
+Purpose: NEXA's legacy importer reads Mirza through its `LegacySourceSession` port
+(`nexa-bot` `apps/api/src/modules/platform/legacy-importer/application/source-port.ts`): table and
+column metadata as `information_schema` reports it, and the rows of `user`, `invoice` and `product` as
+`CAST(col AS CHAR)` text in primary-key byte order. The snapshot is exactly that, taken from the dump, so a
+package-backed adapter (`NxpkgLegacySourceConnector`, `nexa-bot` `docs/legacy-migration/nxpkg-importer.md` §3)
+can feed the frozen `IMPORT_READ_SET_V1` and every versioned read set (`user-status`, `products`,
+`invoice-archive`) **unchanged**, and the importer recomputes its own fingerprints and decisions from it.
+It is collected in the same single streaming parse as staging (`src/mirza2nexa/source_snapshot.py`) and
+does not change any other file: with or without it, every `records/*` file and the `import_id` are
+byte-identical (`tests/test_source_snapshot.py`).
+
+### `source/catalog.json` (canonical JSON, metadata only — no cell value)
+```json
+{
+  "format": "m2n.source-catalog.v1",
+  "snapshot_version": 1,
+  "synthetic_marker": null,
+  "engine_hint": "MYSQL",
+  "tables": [
+    {"name": "invoice", "table_type": "BASE TABLE", "storage_engine": "InnoDB",
+     "charset": "utf8mb4", "collation": "utf8mb4_bin", "rows": 130007,
+     "columns": [{"column": "id_invoice", "data_type": "varchar", "ordinal": 1, "charset": "utf8mb4"}, "…"]},
+    "…"
+  ],
+  "snapshot_tables": {
+    "user": {"file": "source/tables/user.jsonl", "primary_key": "id",
+             "columns": ["id", "Balance", "limit_usertest", "agent", "number", "username", "User_Status"],
+             "rows": 200003},
+    "…": "…"
+  }
+}
+```
+| Field | Meaning (maps to the port) |
+|---|---|
+| `snapshot_version` | `1`. A reader refuses any other value. |
+| `synthetic_marker` | `syntheticMarker()`: the first `label` of NEXA's marker table `nexa_synthetic_fixture` if the dump has that table (`"SYNTHETIC (unlabelled marker)"` when it has no labelled row, like `mysql-legacy-source.ts:347-360`); `null` for a real backup. The converter's synthetic dumps carry `"SYNTHETIC mirza2nexa fixture v1 (not evidence)"`. |
+| `engine_hint` | `"MYSQL"` / `"MARIADB"` from the dump's comment header (`-- MySQL dump … Distrib …`, `-- MariaDB dump`, phpMyAdmin `-- Server version:`); `null` when absent or when two SQL files disagree. A hint only — the package is not a live engine. |
+| `tables[]` | `tables()` + `countRows()`: **every** table the dump creates or inserts into, sorted by UTF-8 name bytes. `table_type` is always `BASE TABLE` (views are not dumped as tables; the parser skips `CREATE VIEW`). `storage_engine`, `charset`, `collation` are the `CREATE TABLE` options as dumped (`null` when the dump does not state them; `charset` falls back to a known prefix of the stated collation, and a stated `CHARSET` without `COLLATE` leaves `collation` null, because the engine's default collation is not provable). `rows` is the **exact** number of rows the dump inserts (every `INSERT`/`REPLACE` row event, like `COUNT(*)` after loading; a real `mysqldump` never repeats a key). |
+| `tables[].columns[]` | `columns()` / `catalogColumns()`: every column of the table in `CREATE TABLE` order. `data_type` is the lowercase base type as `information_schema.COLUMNS.DATA_TYPE` reports it (`varchar`, `int`, `bigint`, `text`, `longtext`, `decimal`, `datetime`, …; aliases resolved: `integer`→`int`, `bool`→`tinyint`, `numeric`/`dec`/`fixed`→`decimal`, `real`→`double`; `json`→`longtext` when `engine_hint` is `MARIADB`). `ordinal` is 1-based. `charset` is the column's character set for `char`/`varchar`/`*text`/`enum`/`set` (column clause, else the table's) and `null` for every other type. |
+| `snapshot_tables` | The tables that have a rows file, with their primary key, the exact column list of the file and its row count. A table absent from the dump, or lacking its primary key column, has no file (NEXA then refuses it itself: `SOURCE_SCHEMA_MISSING_TABLE` / `_COLUMN`). |
+
+### `source/tables/<table>.jsonl` (`user`, `invoice`, `product`)
+Line 1 is a header, every further line is one row:
+```
+{"columns":["id","Balance","limit_usertest","agent","number","username","User_Status"],"format":"m2n.source-table.v1","primary_key":"id","table":"user"}
+{"c":["7000000000","0","0","n","none","synthetic_user_0","Active"]}
+```
+* **Columns** are the NEXA allowlist present in the dump, in this fixed order (the union of what
+  `IMPORT_READ_SET_V1`, `user-status`, `products` and `invoice-archive` read; exact, case-sensitive names):
+  * `user`: `id, Balance, limit_usertest, agent, number, username, User_Status`
+  * `invoice`: `id_invoice, id_user, username, Status, is_test, code_panel, code_product, Volume, Service_time,
+    time_unit, is_custom, price_product, Service_location, time_sell, name_product, note, refral, time_cron,
+    notifctions`
+  * `product`: `id, code_product, name_product, price_product, Volume_constraint, Service_time, Location, Category,
+    category, agent, note, data_limit_reset, one_buy_status, hide_panel`
+
+  No other column is ever written. Secret columns (`inbounds`, `proxies`, `user_info`, `uuid`, `bottype`, every
+  column the catalogue marks secret or whose name looks like a credential) cannot be in the allowlist: the
+  converter refuses to run otherwise (`source_snapshot.assert_allowlist_safe`, tested). A reader serves
+  `rows(table, cols)` / `readSetRows(table, pk, cols)` by projecting `c` onto `cols` by name and refuses a
+  column the header does not list.
+* **Cells** are `string | null`: exactly the text MySQL returns for `CAST(col AS CHAR)` of the dumped value under
+  the column's declared type, `null` for SQL `NULL`. A column left out of an `INSERT` column list takes its
+  literal `DEFAULT` (`DEFAULT NULL` → `null`).
+* **Order**: rows sorted by the UTF-8 bytes of the primary-key cell, ascending (`ORDER BY CAST(pk AS BINARY)`,
+  `compareKeyBytes`); an `int` key therefore sorts `"10"` before `"2"`. Keys are unique and non-null.
+* The manifest's `records` count for a table file is `rows + 1` (the header line).
+
+### Value fidelity (fail closed)
+The dump parser unescapes literals (`\'`, `''`, `\n`, `\0`, …; `\%` and `\_` keep their backslash, as in
+MySQL). A cell is written only when its MySQL text is provable; otherwise the package is **blocked**:
+
+| Declared type | Written text | Refused (blocks) |
+|---|---|---|
+| `char`, `varchar`, `*text`, `enum`, `set` | the string as stored (`char`: trailing spaces removed, as MySQL returns them); an unquoted integer or plain decimal literal as written (`15`, `1.50`) | value longer than `varchar(n)`/`char(n)` characters; exponent literals; `''` in `enum`/`set`; bytes that are not UTF-8 |
+| `tinyint` … `bigint` (signed/unsigned) | canonical integer (`'-7'` → `-7`, `5.0` → `5`) | non-integral (`'12.5'`), empty string, out of range, `zerofill` |
+| `decimal(p,s)` | fixed-point with exactly `s` fraction digits (`5.5` → `5.50` for `s = 2`) | more fraction digits than `s` (MySQL would round), more than `p` digits |
+| `date`, `datetime(fsp)`, `timestamp(fsp)`, `time`, `year` | as dumped | anything but the canonical form with exactly `fsp` fraction digits |
+| `float`, `double`, `json` (MySQL), unknown types | — | any non-null value (engine-formatted / normalised text is not provable) |
+| `binary`, `varbinary`, `*blob`, `bit`, spatial | — | the column itself, if allowlisted |
+
+Blocker codes (in `manifest.blockers` and `report.json`): `SOURCE_SNAPSHOT_BINARY_COLUMN` (an allowlisted column
+has a binary type), `SOURCE_SNAPSHOT_VALUE_UNREPRESENTABLE` (count of rows with an unprovable cell),
+`SOURCE_SNAPSHOT_KEY_INVALID` (null or duplicate primary key). Known, documented limits: the `utf8` charset
+alias is reported as dumped (not rewritten to `utf8mb3`); `INSERT IGNORE` / `ON DUPLICATE KEY` semantics are
+not replayed (a repeated key is reported as `SOURCE_SNAPSHOT_KEY_INVALID`, never resolved); a column added by
+`ALTER TABLE … ADD COLUMN` is not tracked by the parser.
+
+### Sensitivity
+The snapshot holds personal cells the converter's own records minimise — `user.number` (phone),
+`invoice.note`, `invoice.refral`, `username` — because NEXA's importer reads them (it classifies the phone and
+never writes it; `number` is outside the v1 fingerprint). They exist only inside the encrypted payload and the
+job's `stage/` directory (`DATA_PROTECTION.md` §5, §6). No secret column is ever included.
+
 ## Companion file: `ownership-decisions.json` (not inside the package)
 
 The package is immutable once written, so administrator ownership decisions taken afterwards in the
@@ -135,4 +246,4 @@ These fields are added on top of the 1.0.0 manifest:
 `NEXA_IMPORTER_PLAN.md`) exists and has passed its acceptance tests.
 
 The manifest's `package_schema_version` is set by the converter (`nxpkg/manifest.py`); this document describes
-content contract 1.2.0.
+content contract 1.4.0.

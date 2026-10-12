@@ -391,6 +391,10 @@ td.ltr { text-align: left; }
   padding: .7rem 1rem; display: flex; flex-direction: column; gap: .2rem; margin-bottom: .8rem;
 }
 .importer-warning span { color: var(--text); }
+.restore-note, .restore-steps { background: var(--primary-soft); border-color: var(--primary); }
+.restore-note { display: flex; flex-direction: column; gap: .2rem; }
+.restore-note strong, .restore-steps h2 { color: var(--primary); }
+.steps-list { margin: .4rem 0; padding-inline-start: 1.4rem; display: grid; gap: .35rem; }
 .contract-version { font-size: 1.05rem; font-weight: 700; }
 .contract-version .mono { font-size: 1.15rem; color: var(--primary); background: var(--primary-soft); padding: .1rem .6rem; border-radius: 8px; }
 #coverage-table tbody tr[data-table] td { border-bottom: 0; padding-bottom: .2rem; }
