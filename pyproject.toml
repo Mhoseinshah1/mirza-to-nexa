@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mirza2nexa"
-version = "0.7.0"
+version = "0.8.0"
 description = "Local-first, offline converter from Mirza SQL backups (ZIP) to versioned NEXA migration packages (.nxpkg)"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }

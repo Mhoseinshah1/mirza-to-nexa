@@ -124,6 +124,39 @@ and its readiness becomes `blocked`.
   * NEXA never applies a changed opening balance (OQ-LWD-02). Each change therefore becomes a blocking
     `BALANCE_CHANGED_SINCE_PREVIOUS` review item.
 
+## Column carry (converter 0.8.0, contract 1.5.0)
+
+Every column of every catalogued table has one disposition in `reports/coverage.json` (`column_dispositions`;
+`PACKAGE_CONTRACT.md` §"Column carry"). The columns the real backup's 0.7.0 coverage report listed as not in the
+package are decided as follows (declarations with notes and evidence: `src/mirza2nexa/modules/carry.py`; meanings of
+fork-only columns are inferred from the name and marked UNPROVEN there). C = carried (value-redacted),
+M = minimised, S = secret-dropped (listed in `reports/manual-reconfiguration.json`).
+
+| Table | Carried | Secret-dropped | Minimised | Lands in (record_type) | Linked by |
+|---|---|---|---|---|---|
+| `user` (36) | 33: roll_Status, Processing_value(_one/_tow/_four), step, description_blocking, pagenumber, message_count, last_message_time, affiliatescount, affiliates, namecustom, number_username, register, verify, joinchannel, checkstatus, score, limitchangeloc, status_cron, date_message, low_balance_alert_sent, hidden_gateways, shown_gateways, first_name, commission_percentage, min_purchase_warned_month, min_purchase_evaluated_month, agent_tier_since, affiliate_alert_time, ad_source, card_message_id (a message id, not a card) | 3: codeInvitation (redeemable code), bottype (sub-bot token), token | — | `records/archive/user_carried.jsonl` (`legacy_archive_row`) | `customer.telegram_user_id` = `user.id` |
+| `invoice` (9) | 9: note, inboundid (an id, not a credential), refral, time_cron, notifctions, rate_invoice, limit_user, id_payment, payable_amount | (bottype, user_info, uuid as before) | — | `records/archive/invoice_carried.jsonl` | `customer` = `id_user`; `invoice.invoice_key` |
+| `product` (6) | 6: limit_user, display_order, style, usage_type, emoji_id, time_unit | (inbounds, proxies as before) | — | `records/archive/product_carried.jsonl` | `source_pk` = product id |
+| `service_other` (9) | 7: id_payment, payable_amount, id_invoice, action, source, params, created_at | 2: bottype (sub-bot token), panel_response (raw panel response, like `output`) | — | `records/archive/service_other_carried.jsonl` | `customer` = `id_user`; `invoice` = `id_invoice` |
+| `affiliates` (9) | every fork column not named like a credential (name rule) | credential-named ones | — | `records/configuration/affiliates_carried.jsonl` | — |
+| `category` (1) | style | — | — | `records/archive/category_carried.jsonl` | — |
+| `reagent_report` (2) | gift_milestone, gift_invoice | — | — | `records/archive/reagent_report_carried.jsonl` | `customer` = `user_id` |
+| `setting` (33) | every fork column not named like a credential (name rule) | jwt_secret, ai_api_key (declared) + credential-named ones | — | `records/configuration/setting_carried.jsonl` | — |
+| `marzban_panel` (22) | 21: hosts, status_happ, limit_user, limit_in_panel, price_pre_user, buy_additional_user, display_order, style, status_keyboard_config, content_after_buy, MethodUsername_key, btn_config, btn_sublink, emoji_id, auth_type, auto_disabled, text_afterpay, text_aftertest, hide_agent, status_extra_volume, status_extra_time | 1: proxy_sockss (a proxy definition can embed user:password; re-entered with the panel credentials) | — | `records/archive/marzban_panel_carried.jsonl` | `source_pk` = panel id |
+| `admin` | id_admin, rule | username, password | — | `records/archive/admin.jsonl` | `customer` = `id_admin` |
+| `botsaz` | id, id_user, admin_ids, username, hide_panel, time, product_info | bot_token, webhook_secret | setting → JSON key names | `records/archive/botsaz.jsonl` | `customer` = `id_user` |
+| `global_hidden_gateways` | id, code, agent, created_at (+ name rule) | credential-named | — | `records/archive/global_hidden_gateways.jsonl` | — |
+| `logs_api` | id, time, actions | header | ip → ipv4/ipv6; data → JSON key names | `records/archive/logs_api.jsonl` | — |
+| `topicid` | report, idreport | — | — | `records/archive/topicid.jsonl` | — |
+| `ai_business_chat` (14) | every column not named like a credential | credential-named (api_key, token, …) | — | `records/archive/ai_business_chat.jsonl` | `customer` = first of user_id, id_user, chat_id, telegram_id |
+
+Counts for the explicitly listed columns: carried 97 (user 33, invoice 9, product 6, service_other 7, category 1,
+reagent_report 2, marzban_panel 21, admin 2, botsaz 7, global_hidden_gateways 4, logs_api 3, topicid 2, plus every
+non-credential fork column of `affiliates`, `setting`, `ai_business_chat`), secret-dropped 13 (user 3, service_other 2,
+setting 2, marzban_panel 1, admin 2, botsaz 2, logs_api 1; invoice.bottype was already dropped), minimised 3 (botsaz.setting,
+logs_api.ip, logs_api.data). The supplement records never change a 0.7.0 record: they are written beside them
+(`schema: m2n.carried_columns.v1`, key `legacy:carried:<table>:<pk>`).
+
 ## Blocked: needs real data or an owner decision
 
 | Topic | Why it is blocked | Evidence |

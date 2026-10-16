@@ -45,7 +45,7 @@ module drops every other key (see §3), and the staging database is deleted at t
 
 | Table | Class | Leaves | Secret / dropped | Evidence |
 |---|---|---|---|---|
-| `setting` | CONFIGURATION | allow-listed switch, limit, layout and text columns (single row) | `webhook_secret`; columns not in the list (`unmapped_columns`) | PRO db/tables/setting.php:18-66,114-164; BMP table.php:110-143; PRO migrations 010, 011; EVJ#setting |
+| `setting` | CONFIGURATION | allow-listed switch, limit, layout and text columns (single row); since 0.8.0 every other column through the carry (`setting_carried.jsonl`) unless its name looks like a credential | `webhook_secret`, `jwt_secret`, `ai_api_key`, credential-named fork columns | PRO db/tables/setting.php:18-66,114-164; BMP table.php:110-143; PRO migrations 010, 011; EVJ#setting |
 | `PaySetting` | CONFIGURATION (key allow-list) | gateway on/off switches, min/max limits, cashback %, fees, tutorial texts | `cardnumber`, `CartDescription`, `namecard`, `CartDirect`, `Exception_auto_cart`, `apinowpayment`, `merchant_id_aqayepardakht`, `marchent_tronseller`, `walletaddress`, `apiternado`, `merchant_zarinpal`, `apiiranpay`, `apiiranpay4`, `endpointiranpay4`, `variza_api_token`, `variza_webhook_secret`, `marchent_floypay`, `urlpaymenttron`, `perfectmoney_*`, **and every unknown key** | PRO db/tables/PaySetting.php:7-110; PRO migrations 005, 008:21-29; BMP table.php:511-532; EVJ#PaySetting |
 | `shopSetting` | CONFIGURATION (key allow-list) | the 17 seeded price/switch keys | unknown keys | PRO db/tables/shopSetting.php:5-36; EVJ#shopSetting |
 | `textbot` | CONFIGURATION | `id_text`, `text` (redacted) | — | BMP table.php:460-509; EVJ#textbot |
@@ -54,11 +54,21 @@ module drops every other key (see §3), and the staging database is deleted at t
 | `app` | CONFIGURATION | app name and download link | — | PRO db/tables/app.php; PRO keyboard.php:844-850; EVJ#app |
 | `protocol` | CONFIGURATION | `NameProtocol` | other columns (no DDL exists) | BMP keyboard.php:336-350 |
 | `help_category` | REVIEW (fails closed) | nothing; rows counted plus a `CONFIG_NO_STORABLE_COLUMN` review item | all columns, until the operator supplies the DDL | EVJ#help_category (operator report only) |
-| `admin` | EXCLUDED | counts only | `username`, `password` (web-panel login and bcrypt or plaintext hash) | PRO db/tables/admin.php; PRO db/migrations/012_admin_panel_credentials.php:7-16; NEXA research admin-management MASTER.md; EVJ#admin |
-| `botsaz` | EXCLUDED | counts only | `bot_token`, `webhook_secret`, `setting` (contains `cart_info`) | PRO db/tables/botsaz.php; PRO api/users.php:600-668; EVJ#botsaz |
-| `card_number` | EXCLUDED | counts only | `cardnumber`; `namecard` (personal) | PRO db/tables/card_number.php; PRO index.php:4660-4701; EVJ#card_number |
-| `logs_api` | EXCLUDED | counts only | `header`, `data` (raw request), `ip` | PRO db/tables/logs_api.php; PRO api/utils.php:173; PRO cronbot/optimize_order.php:15; EVJ#logs_api |
-| `topicid` | EXCLUDED | counts only | — (not secret, but bound to the old report group) | PRO db/tables/topicid.php; EVJ#topicid |
+| `admin` | ARCHIVE (carry, 0.8.0; EXCLUDED before) | `id_admin`, `rule` | `username`, `password` (web-panel login and bcrypt or plaintext hash) | PRO db/tables/admin.php; PRO db/migrations/012_admin_panel_credentials.php:7-16; NEXA research admin-management MASTER.md; EVJ#admin |
+| `botsaz` | ARCHIVE (carry, 0.8.0; EXCLUDED before) | `id`, `id_user`, `admin_ids`, `username`, `hide_panel`, `time`, `product_info`; `setting` minimised to its JSON key names | `bot_token`, `webhook_secret`; values of `setting` (contains `cart_info`) | PRO db/tables/botsaz.php; PRO api/users.php:600-668; EVJ#botsaz |
+| `card_number` | EXCLUDED | counts only | `cardnumber`; `namecard` (payout holder name, SECRET since 0.8.0 like `PaySetting.namecard`) | PRO db/tables/card_number.php; PRO index.php:4660-4701; EVJ#card_number |
+| `logs_api` | ARCHIVE (carry, 0.8.0; EXCLUDED before) | `id`, `time`, `actions`; `ip` minimised to `ipv4`/`ipv6`; `data` minimised to its JSON key names | `header`; values of `data` and `ip` | PRO db/tables/logs_api.php; PRO api/utils.php:173; PRO cronbot/optimize_order.php:15; EVJ#logs_api |
+| `topicid` | ARCHIVE (carry, 0.8.0; EXCLUDED before) | `report`, `idreport` | — | PRO db/tables/topicid.php; EVJ#topicid |
+
+| `global_hidden_gateways` | ARCHIVE (carry, 0.8.0; EXCLUDED before) | `id`, `code`, `agent`, `created_at`, and fork columns not named like credentials | credential-named columns |
+| `ai_business_chat` | ARCHIVE (carry, 0.8.0; EXCLUDED before) | every column not named like a credential, values redacted; linked to the customer | credential-named columns (`api_key`, `token`, …) |
+
+**Owner decisions taken in 0.8.0 (column carry, `PACKAGE_CONTRACT.md` §"Column carry").** *logs_api*: the client IP
+is personal data with no migration use, so only its family survives; request bodies can hold tokens and passwords, so
+only their top-level key names survive (both computed at parse time: the raw value never reaches disk).
+*ai_business_chat*: the owner's own customer-conversation history is carried as restricted history (NEXA shows
+archive payloads only to holders of the legacy PII permission, audited); residual risk: value redaction of free
+chat text is best-effort (§8). Every secret left out is listed by name in `reports/manual-reconfiguration.json`.
 
 **Why `card_number` is excluded instead of masked to the last 4 digits.** Mirza picks a card at
 random for each top-up (`PRO index.php:4660`), and no receipt row references a card row. The last 4
