@@ -16,6 +16,7 @@ from ..errors import MigrationError
 from . import (  # noqa: F401
     adoption,
     agents,
+    carry,
     config_tables,
     core_specs,
     engagement,
@@ -28,10 +29,13 @@ from . import (  # noqa: F401
 )
 from .base import _MODULES, Module, ModuleContext, modules_in_order, register_module
 
+# Supplement columns are attached to the specs the other modules registered, so this runs last.
+carry.apply_supplements()
+
 #: Converter modules that MUST be registered for a conversion to start.
 EXPECTED_MODULES: frozenset[str] = frozenset({
     "generic", "payments", "wallet_history", "services_ext", "agents", "engagement", "support", "config_tables",
-    "adoption", "ownership",
+    "adoption", "ownership", "carry",
 })
 
 #: Every Mirza table the catalogue MUST know (docs/evidence/mirza_tables.json + ``protocol``).

@@ -22,13 +22,12 @@ Decisions (full table with citations: ``docs/DATA_PROTECTION.md``):
   the runtime DDL; columns whose *names* look like credentials are dropped at parse time, the rest
   is archived (free text redacted) as ``legacy_archive_row`` in ``records/archive/<table>.jsonl``
   with a ``TABLE_NEEDS_DECISION`` review item. Nothing is applied to NEXA.
-* **EXCLUDED** — ``card_number`` (payout cards), ``logs_api`` (request log with headers/bodies),
-  ``admin`` (web-panel logins + password hashes), ``botsaz`` (sub-bot tokens, webhook secrets),
-  ``topicid`` (bound to the old report group), ``global_hidden_gateways`` (payment-gateway visibility,
-  presumed secret-bearing) and ``ai_business_chat`` (AI chat transcripts, presumed personal and
-  possibly carrying AI-provider keys). Nothing is staged; coverage counts the rows. The two
-  evidence-less EXCLUDED tables additionally raise a ``CONFIG_UNVERIFIED_TABLE_EXCLUDED`` review item
-  when they are *not* empty, so the owner knows rows were left behind.
+* **EXCLUDED** — ``card_number`` (business payout cards: both columns secret). Nothing is staged;
+  coverage counts the rows and ``reports/manual-reconfiguration.json`` names the columns.
+* ``topicid``, ``logs_api``, ``admin``, ``botsaz``, ``global_hidden_gateways`` and ``ai_business_chat``
+  were EXCLUDED up to converter 0.7.0. Since 0.8.0 (contract 1.5.0) they are ARCHIVE tables owned by
+  :mod:`mirza2nexa.modules.carry`: their non-secret columns are carried (credentials dropped by
+  declaration, personal request data minimised at parse time).
 
 Uncatalogued tables (policy, enforced in ``convert.py``): an uncatalogued table that is **empty** is
 reported with status ``empty`` and does not block; a **non-empty** uncatalogued table blocks the
@@ -155,7 +154,9 @@ REVIEW_FLAGS: dict[str, dict[str, bool]] = {"help_category": {"activates_role": 
 
 #: EXCLUDED tables whose classification rests on the table *name* only (no DDL, no code in any
 #: source). Non-empty instances get a review item so excluding them is an explicit owner decision.
-UNVERIFIED_EXCLUDED: frozenset[str] = frozenset({"global_hidden_gateways", "ai_business_chat"})
+#: Empty since 0.8.0: the two evidence-less tables are carried by ``modules/carry.py`` (with
+#: ``CARRY_UNVERIFIED_TABLE_ARCHIVED`` instead).
+UNVERIFIED_EXCLUDED: frozenset[str] = frozenset()
 OPREP = "operator-report 2026-10 (present but empty in the real backup; no DDL, no code in any source)"
 
 
@@ -204,14 +205,6 @@ SPECS: tuple[TableSpec, ...] = (
                                                   f"{NEXA_R}/mirzabotbottextmanagementinvestigationcomplete",
                                                   f"{EVJ}#textbot"),
           (_c("id_text"), _c("text", PUBLIC, "free text; redacted")), primary_key=("id_text",)),
-    _spec("topicid", EXCLUDED, "Report type → forum topic id in the admin report group",
-          "شناسه تاپیک گزارش‌ها در گروه مدیریت",
-          "Bound to the old Telegram report group; NEXA has its own ops-log topics (evidence JSON "
-          "recommended_class EXCLUDED). Not secret, but has no value outside the old group.",
-          "none (NEXA ops_log_topics configured by hand)",
-          (f"{PRO} db/tables/topicid.php:3-27", f"{PRO} function.php:298-309",
-           f"{NEXA_R}/mirzabottelegramloggroupinvestigationcomplete", f"{EVJ}#topicid"),
-          (_c("report"), _c("idreport")), primary_key=("report",)),
     _spec("channels", CONFIGURATION, "Forced-join channels shown to every user",
           "کانال‌های عضویت اجباری",
           "Channel list is useful to the operator; linkjoin (invite link) grants access to a private channel and "
@@ -257,54 +250,6 @@ SPECS: tuple[TableSpec, ...] = (
           None, sensitivity=PERSONAL,
           open_questions=("Supply the CREATE TABLE header (no values) to classify its columns.",
                           "Is it keyed by agent (botsaz.id_user) and does it hold card/payout text?")),
-    _spec("global_hidden_gateways", EXCLUDED, "Payment gateways hidden globally (deployed fork only; no DDL)",
-          "درگاه‌های پرداخت پنهان‌شده",
-          "Present but empty in the real backup; no public source declares or reads it. By name it is payment "
-          "gateway visibility configuration; PaySetting shows that Mirza stores gateway credentials next to "
-          "gateway switches, so it is presumed secret-bearing and EXCLUDED: nothing staged, rows counted, and a "
-          "non-empty instance raises CONFIG_UNVERIFIED_TABLE_EXCLUDED. NEXA gateways are configured fresh.",
-          "none (NEXA payment gateways configured by hand)",
-          (f"{EVJ}#global_hidden_gateways", OPREP, f"{PRO} db/tables/PaySetting.php:7-110"),
-          None, sensitivity=SECRET,
-          open_questions=("Supply the CREATE TABLE header (no values) if the table is ever non-empty.",)),
-    _spec("ai_business_chat", EXCLUDED, "AI assistant chat log (deployed fork only; no DDL)",
-          "گفتگوهای دستیار هوش مصنوعی",
-          "Present but empty in the real backup; no public source declares or reads it. By name it holds "
-          "conversation transcripts between customers and an AI assistant: personal free text with no NEXA "
-          "target, and AI integrations commonly keep provider API keys / prompts beside the log. Redaction "
-          "cannot prove free-form chat clean, and REVIEW would copy personal transcripts into the package for no "
-          "migration use, so it is EXCLUDED: nothing staged, rows counted, and a non-empty instance raises "
-          "CONFIG_UNVERIFIED_TABLE_EXCLUDED for an explicit owner decision.",
-          "none (no NEXA equivalent)",
-          (f"{EVJ}#ai_business_chat", OPREP),
-          None, sensitivity=SECRET,
-          open_questions=("Supply the CREATE TABLE header (no values) if the table is ever non-empty.",
-                          "Does NEXA need any AI chat history? (default: no)")),
-    _spec("admin", EXCLUDED, "Bot/web-panel administrators and their role", "مدیران ربات و نقش آن‌ها",
-          "Holds web-panel login names and password hashes; admins are re-created in NEXA by hand (own RBAC + "
-          "2FA). Role enforcement in Mirza is NOT_TESTED. Nothing is staged; rows are counted.",
-          "none (NEXA admins re-created manually)",
-          (f"{PRO} db/tables/admin.php:3-23", f"{PRO} db/migrations/012_admin_panel_credentials.php:7-16",
-           f"{BMP} table.php:176-190",
-           f"{NEXA_R}/mirzabotadminmanagementinvestigationcomplete/admin-management-knowledge/MASTER.md",
-           f"{EVJ}#admin"),
-          (_c("id_admin", PERSONAL, "admin Telegram id"), _c("rule", PUBLIC, "role name"),
-           _c("username", SECRET, "web-panel login name; half of a credential pair"),
-           _c("password", SECRET, "bcrypt hash or legacy plaintext (migration 012); " + _SEC_NOTE)),
-          primary_key=("id_admin",), sensitivity=SECRET,
-          open_questions=("Which Mirza admins become NEXA admins, with which role? (decided by hand)",)),
-    _spec("botsaz", EXCLUDED, "Reseller sub-bots built by agents (one bot per agent)", "ربات‌های نمایندگان",
-          "Bot tokens, webhook secrets and per-bot settings (card info); NEXA re-creates bots by hand. Nothing is "
-          "staged; rows are counted.", "none (NEXA bot_instances, manual)",
-          (f"{PRO} db/tables/botsaz.php:3-19", f"{PRO} api/users.php:600-668", f"{PRO} function.php:1815",
-           f"{EVJ}#botsaz"),
-          (_c("id"), _c("id_user", PERSONAL, "agent Telegram id"), _c("admin_ids", PERSONAL, "JSON list of ids"),
-           _c("username", PUBLIC, "public bot username"),
-           _c("setting", SECRET, "JSON incl. cart_info (payout card text)"), _c("hide_panel"), _c("time"),
-           _c("bot_token", SECRET, "Telegram bot token; " + _SEC_NOTE),
-           _c("webhook_secret", SECRET, "Telegram webhook secret; " + _SEC_NOTE)),
-          primary_key=("id",), sensitivity=SECRET,
-          open_questions=("Does NEXA support reseller sub-bots? Agents must re-register their bots.",)),
     _spec("card_number", EXCLUDED, "Business payout cards shown for card-to-card top-ups",
           "کارت‌های بانکی دریافت وجه",
           "Card number + holder name of the business payout account: secret, and NEXA configures its own payout "
@@ -312,16 +257,10 @@ SPECS: tuple[TableSpec, ...] = (
           "digits have no proven reconciliation use.", "none",
           (f"{PRO} db/tables/card_number.php:3-9", f"{PRO} index.php:4660-4701",
            f"{PRO} db/migrations/003_card_number_charset.php", f"{EVJ}#card_number"),
-          (_c("cardnumber", SECRET, "payout card number"), _c("namecard", PERSONAL, "card holder name")),
+          (_c("cardnumber", SECRET, "payout card number"),
+           _c("namecard", SECRET, "holder name of the business payout card; part of the payout destination "
+                                  "(PaySetting.namecard is SECRET too); re-entered in NEXA's payout settings")),
           primary_key=("cardnumber",), sensitivity=SECRET),
-    _spec("logs_api", EXCLUDED, "Mini-app / API request log (headers, bodies, IPs)", "لاگ درخواست‌های API",
-          "Raw request headers (Authorization) and bodies; Mirza itself purges it (optimize_order.php:15). "
-          "No migration value.", "none",
-          (f"{PRO} db/tables/logs_api.php:3-12", f"{PRO} api/utils.php:173", f"{PRO} cronbot/optimize_order.php:15",
-           f"{EVJ}#logs_api"),
-          (_c("id"), _c("header", SECRET, "raw request headers incl. Authorization"),
-           _c("data", SECRET, "raw request body"), _c("ip", PERSONAL), _c("time"), _c("actions")),
-          primary_key=("id",), sensitivity=SECRET),
 )
 
 for _s in SPECS:

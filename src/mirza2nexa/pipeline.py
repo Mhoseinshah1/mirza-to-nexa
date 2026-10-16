@@ -333,6 +333,13 @@ def _convert_archive(archive: Path, workspace: Path, opts: ConvertOptions, *,
     }
     writer.write_json("reports/reconciliation.json", outcome.reconciliation)
     writer.write_json("reports/coverage.json", {"tables": outcome.coverage})
+    # Every secret the package deliberately does not carry, by table/column/key NAME only (no value):
+    # what the owner must re-enter by hand in NEXA (contract 1.5.0).
+    writer.write_json("reports/manual-reconfiguration.json", {
+        "format": "m2n.manual-reconfiguration.v1",
+        "note": "Names only. No value of any listed column or key is in this package.",
+        "items": outcome.manual_reconfiguration,
+    })
     # Review taxonomy + migration readiness (aggregates only, no PII); also written next to the
     # package so the UI and the operator can read them without decrypting anything.
     from . import readiness as _readiness

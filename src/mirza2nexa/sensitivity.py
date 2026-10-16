@@ -151,3 +151,47 @@ def contains_secret(value: str) -> bool:
     hits: list[str] = []
     redact_text(value, hits.append)
     return bool(hits)
+
+
+# ---- data minimisation (parse-time derivatives) ------------------------------------------------
+# A column with ``ColumnSpec.minimise`` is staged as the derivative below, never as its raw value.
+# Each derivative is chosen so it cannot carry a credential or the personal value itself.
+
+_KEY_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.\-]{0,63}$")
+
+
+def _ip_family(value: str) -> str:
+    import ipaddress
+
+    try:
+        ip = ipaddress.ip_address(value.strip())
+    except ValueError:
+        return "unparseable"
+    return "ipv4" if ip.version == 4 else "ipv6"
+
+
+def _json_keys(value: str) -> str:
+    """The sorted top-level key NAMES of a JSON object (as a JSON array), never a value."""
+    import json
+
+    try:
+        doc = json.loads(value)
+    except (ValueError, RecursionError):
+        return json.dumps({"kind": "not_json", "length": len(value)})
+    if isinstance(doc, dict):
+        names = sorted(k if _KEY_NAME.fullmatch(k) else "[unusual-key]" for k in doc)
+        return json.dumps({"kind": "object", "keys": names[:100], "key_count": len(doc)})
+    return json.dumps({"kind": type(doc).__name__ if doc is not None else "null", "length": len(value)})
+
+
+#: name → function(raw text) → derivative text. ``None`` stays ``None``.
+MINIMISERS: dict[str, Callable[[str], str]] = {
+    "ip_family": _ip_family,  # an IP address → "ipv4" / "ipv6" / "unparseable"
+    "json_keys": _json_keys,  # a JSON document → its top-level key names only
+}
+
+
+def minimise(kind: str, value: str | None) -> str | None:
+    if value is None:
+        return None
+    return MINIMISERS[kind](value)

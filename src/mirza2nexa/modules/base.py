@@ -96,6 +96,22 @@ class ModuleContext:
             for r in batch:
                 yield r[0], dict(zip(cols, r[1:], strict=True))
 
+    def carry_rows(self, stats: TableStats) -> Iterator[tuple[int, dict[str, Any]]]:
+        """Stream the separately staged carry columns (keys + carried + minimised) in dump order."""
+        if not stats.carry_sql_name:
+            return
+        cols = list(stats.carry_key_columns + stats.carried_columns + stats.minimised_columns)
+        q = lambda n: '"' + ("c_" + n).replace('"', '""') + '"'  # noqa: E731
+        sql = (f'SELECT rowno, {", ".join(q(c) for c in cols)} FROM "{stats.carry_sql_name}" '  # noqa: S608 - names from staging
+               "ORDER BY rowno")
+        cur = self.conn.execute(sql)
+        while True:
+            batch = cur.fetchmany(1000)
+            if not batch:
+                return
+            for r in batch:
+                yield r[0], dict(zip(cols, r[1:], strict=True))
+
     def count_rows(self, stats: TableStats) -> int:
         return stats.rows
 

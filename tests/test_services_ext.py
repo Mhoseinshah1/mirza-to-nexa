@@ -161,7 +161,7 @@ def test_panel_secrets_never_leave(default, tmp_path):
         assert s not in staged, s
     cov = {c["table"]: c for c in res.report["coverage"]}
     assert set(sx.PANEL_SECRET_COLUMNS) <= set(cov["marzban_panel"]["dropped_secret_columns"])
-    assert cov["service_other"]["dropped_secret_columns"] == ["output"]
+    assert set(cov["service_other"]["dropped_secret_columns"]) == {"output", "bottype", "panel_response"}
     assert cov["manualsell"]["dropped_secret_columns"] == ["contentrecord"]
     assert "api_token" in cov["vs_package"]["dropped_secret_columns"]
 

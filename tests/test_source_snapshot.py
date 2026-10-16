@@ -41,7 +41,8 @@ def converted(tmp_path_factory):
 
 def test_contract_version_and_files_present(converted):
     _tmp, _zp, _exp, res = converted
-    assert PACKAGE_SCHEMA_VERSION == "1.4.0"
+    # 1.5.0 (column carry) only adds files and fields; the snapshot itself is unchanged since 1.4.0.
+    assert PACKAGE_SCHEMA_VERSION == "1.5.0"
     src = res.stage_dir / "source"
     assert (src / "catalog.json").is_file()
     for t in ("user", "invoice", "product"):

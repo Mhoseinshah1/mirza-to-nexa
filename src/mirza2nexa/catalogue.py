@@ -42,15 +42,34 @@ CLASS_FA = {
 PUBLIC, PERSONAL, FINANCIAL, SECRET = "public", "personal", "financial", "secret"
 
 
+#: Column dispositions reported per column in ``reports/coverage.json`` (``column_dispositions``).
+STORED = "stored"  # staged for the table's own converter module
+CARRIED = "carried"  # staged separately and written verbatim (value-redacted) by the ``carry`` module
+MINIMISED = "minimised"  # only a derivative (see ColumnSpec.minimise) is staged; the raw value never is
+SECRET_DROPPED = "secret_dropped"  # noqa: S105 - disposition name (never staged; manual-reconfiguration)
+EXCLUDED_COLUMN = "excluded"  # column of an EXCLUDED table: counted only, reason in the catalogue
+DISPOSITIONS = (STORED, CARRIED, MINIMISED, SECRET_DROPPED, EXCLUDED_COLUMN)
+
+
 @dataclass(frozen=True)
 class ColumnSpec:
     name: str
     sensitivity: str = PUBLIC  # public | personal | financial | secret
     note: str = ""
+    # Data minimisation applied at PARSE time (``sensitivity.MINIMISERS``): only the derivative is
+    # staged, so the raw value never touches disk. Allowed on secret columns (e.g. a request body
+    # reduced to its JSON key names).
+    minimise: str | None = None
 
     @property
     def storable(self) -> bool:
+        """The RAW value may be staged."""
         return self.sensitivity != SECRET
+
+    @property
+    def staged(self) -> bool:
+        """Something (the raw value, or its minimised derivative) is staged."""
+        return self.storable or self.minimise is not None
 
 
 @dataclass(frozen=True)
@@ -73,43 +92,103 @@ class TableSpec:
     # At staging time the value of any key not in the allow-list is replaced by NULL, so
     # gateway credentials never reach the staging database even transiently.
     kv_filter: tuple[str, str, frozenset[str]] | None = None
+    # Columns carried as supplementary history by the ``carry`` module (contract 1.5.0): staged in a
+    # separate table so the module that owns ``columns`` (its records, checksums and the source
+    # fingerprint) is unchanged. Secret entries are declared so they are dropped *explicitly*.
+    carry: tuple[ColumnSpec, ...] = ()
+    # Columns naming the Telegram user a row is about (first one present wins) and the invoice it
+    # belongs to; the carry records link to the customer / invoice through them.
+    customer_columns: tuple[str, ...] = ()
+    invoice_column: str | None = None
 
     def column(self, name: str) -> ColumnSpec | None:
-        if self.columns is None:
-            return None
-        for c in self.columns:
+        for c in self.columns or ():
+            if c.name == name:
+                return c
+        return self.carry_column(name)
+
+    def main_column(self, name: str) -> ColumnSpec | None:
+        for c in self.columns or ():
+            if c.name == name:
+                return c
+        return None
+
+    def carry_column(self, name: str) -> ColumnSpec | None:
+        for c in self.carry:
             if c.name == name:
                 return c
         return None
 
     def storable_columns(self, ddl_columns: tuple[str, ...]) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
-        """Split runtime DDL columns into (stored, dropped_secret, unmapped).
+        """Split runtime DDL columns into (stored, dropped_secret, unmapped) for the OWNING module.
 
-        * declared non-secret columns are stored;
+        * declared non-secret columns are stored (``minimise`` is honoured only on ``carry``
+          columns, so a minimised entry in ``columns`` is simply dropped);
         * declared secret columns are dropped;
-        * undeclared columns of a column-listed spec are *not* stored (unknown sensitivity)
-          and reported as ``unmapped`` so the catalogue can be extended with evidence;
+        * undeclared columns of a column-listed spec are *not* stored for the module; the
+          :meth:`carry_plan` decides whether the ``carry`` module carries or drops them, so
+          ``unmapped`` is always empty since contract 1.5.0 (kept for the report shape);
         * a generic spec stores every column whose name does not look like a credential.
         """
         if self.klass == EXCLUDED:
             return (), tuple(c for c in ddl_columns if column_name_is_secret(c)), ()
-        stored, dropped, unmapped = [], [], []
+        stored, dropped = [], []
         for c in ddl_columns:
             if self.columns is None:
-                # Generic (fork) tables: name heuristics, plus opaque value blobs of settings-like
-                # tables, where credentials hide under innocuous names.
-                settings_like = any(w in self.name.lower() for w in ("setting", "config", "option"))
-                blob = c.lower() in {"value", "values", "data", "content", "json", "config", "setting", "settings"}
-                (dropped if column_name_is_secret(c) or (settings_like and blob) else stored).append(c)
+                (dropped if heuristic_secret(self.name, c) else stored).append(c)
                 continue
-            spec = self.column(c)
+            spec = self.main_column(c)
             if spec is None:
-                unmapped.append(c)
-            elif spec.storable:
+                continue
+            if spec.storable and spec.minimise is None:
                 stored.append(c)
             else:
                 dropped.append(c)
-        return tuple(stored), tuple(dropped), tuple(unmapped)
+        # Undeclared columns are the carry plan's (``carry_plan``); none is left "unmapped".
+        return tuple(stored), tuple(dropped), ()
+
+    def carry_plan(self, ddl_columns: tuple[str, ...], owned: tuple[str, ...]) -> CarryPlan:
+        """What the ``carry`` module does with every column the owning module does not handle.
+
+        A declared carry column follows its spec. An *undeclared* column (a newer Mirza fork) is
+        carried unless its name looks like a credential (or it is an opaque value blob of a
+        settings-like table): then it is dropped and listed for manual reconfiguration. Nothing is
+        left unaccounted. EXCLUDED tables carry nothing.
+        """
+        if self.klass == EXCLUDED:
+            return CarryPlan((), (), (), ())
+        carried, minimised, dropped, heuristic = [], [], [], []
+        for c in ddl_columns:
+            if c in owned:
+                continue
+            spec = self.carry_column(c)
+            if spec is None:
+                heuristic.append(c)
+                (dropped if heuristic_secret(self.name, c) else carried).append(c)
+            elif spec.minimise is not None:
+                minimised.append(c)
+            elif spec.storable:
+                carried.append(c)
+            else:
+                dropped.append(c)
+        return CarryPlan(tuple(carried), tuple(minimised), tuple(dropped), tuple(heuristic))
+
+
+def heuristic_secret(table: str, column: str) -> bool:
+    """Name heuristics for a column no spec declares: credential-like names, plus opaque value
+    blobs of settings-like tables, where credentials hide under innocuous names."""
+    settings_like = any(w in table.lower() for w in ("setting", "config", "option"))
+    blob = column.lower() in {"value", "values", "data", "content", "json", "config", "setting", "settings"}
+    return column_name_is_secret(column) or (settings_like and blob)
+
+
+@dataclass(frozen=True)
+class CarryPlan:
+    carried: tuple[str, ...]  # raw (value-redacted) in the carry record
+    minimised: tuple[str, ...]  # derivative only, computed at parse time
+    dropped: tuple[str, ...]  # secret: never staged
+    heuristic: tuple[str, ...]  # of the above, the ones decided by name (no spec)
+    unmapped: tuple[str, ...] = ()  # nothing is ever left unaccounted (kept for the report shape)
 
 
 @dataclass

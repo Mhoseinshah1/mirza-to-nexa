@@ -115,6 +115,8 @@ class ConversionOutcome:
     mapping: list[dict[str, Any]] = field(default_factory=list)
     resellers: dict[str, Any] = field(default_factory=dict)
     coverage: list[dict[str, Any]] = field(default_factory=list)
+    # reports/manual-reconfiguration.json (contract 1.5.0): every secret left out, by NAME only.
+    manual_reconfiguration: list[dict[str, Any]] = field(default_factory=list)
     blocker_messages: dict[str, str] = field(default_factory=dict)
     warning_messages: dict[str, str] = field(default_factory=dict)
 
@@ -747,6 +749,7 @@ class Converter:
     def _finish_coverage(self) -> None:
         """One coverage row per table in the dump. Nothing is silently ignored."""
         from .catalogue import CATALOGUE, CLASS_FA, EXCLUDED
+        from .modules.carry import column_dispositions, manual_reconfiguration_entries
 
         counts = self.out.counts
         core = {
@@ -758,13 +761,23 @@ class Converter:
                         "review": counts.get("products", {}).get("review", 0)},
         }
         unclassified = 0
+        unaccounted_tables = 0
         for name in sorted(self.tables):
             t = self.tables[name]
             spec = CATALOGUE.lookup(name)
             cov = {"table": name, "rows": t.rows, "columns": len(t.columns),
-                   "stored_columns": list(t.stored_columns), "dropped_secret_columns": list(t.dropped_columns),
+                   "stored_columns": list(t.stored_columns), "dropped_secret_columns": list(dict.fromkeys(t.dropped_columns + t.carry_secret_columns)),
                    "unmapped_columns": list(t.unmapped_columns), "exported": 0, "archived": 0, "review": 0,
-                   "skipped": 0, "redacted_cells": 0}
+                   "skipped": 0, "redacted_cells": 0,
+                   "carried_columns": list(t.carried_columns), "minimised_columns": list(t.minimised_columns),
+                   "carry_heuristic_columns": list(t.carry_heuristic)}
+            dispositions, unaccounted = column_dispositions(t, spec)
+            cov["column_dispositions"] = dispositions
+            cov["unaccounted_columns"] = unaccounted
+            if spec is not None:
+                self.out.manual_reconfiguration.extend(manual_reconfiguration_entries(t, spec))
+                if unaccounted:
+                    unaccounted_tables += 1
             if spec is not None:
                 cov.update({"class": spec.klass, "class_fa": CLASS_FA[spec.klass], "module": spec.module,
                             "purpose_fa": spec.purpose_fa, "nexa_target": spec.nexa_target, "reason": spec.reason,
@@ -808,6 +821,19 @@ class Converter:
                 "COVERAGE_INCOMPLETE",
                 "برای برخی جدول‌های طبقه‌بندی‌شده همه ردیف‌ها پوشش داده نشدند (مثلاً ستون‌ها با قرارداد نمی‌خوانند)؛ "
                 "بسته تا بررسی مسدود است.")
+        if unaccounted_tables:  # defence in depth: carry_plan leaves no column without a disposition
+            self.out.block("COLUMN_UNACCOUNTED", unaccounted_tables)
+            self.blocker_messages.setdefault(
+                "COLUMN_UNACCOUNTED",
+                "برای برخی ستون‌های جدول‌های طبقه‌بندی‌شده هیچ تصمیمی (انتقال، حذف حساس، کمینه‌سازی) ثبت نشد؛ "
+                "بسته مسدود است.")
+        for cov in self.out.coverage:  # secret key names of the key-value settings tables
+            for key in cov.get("dropped_secret_keys") or ():
+                self.out.manual_reconfiguration.append(
+                    {"table": cov["table"], "column": None, "key": key, "rows": 1, "basis": "key_allow_list",
+                     "category": "gateway_or_payout_setting",
+                     "action": "Enter it again in NEXA's own payment/gateway settings if it is still needed.",
+                     "action_fa": "در صورت نیاز، در تنظیمات درگاه/پرداخت NEXA دوباره وارد شود."})
         if unclassified:
             self.out.block("UNCLASSIFIED_TABLE", unclassified)
             self.blocker_messages.setdefault(
