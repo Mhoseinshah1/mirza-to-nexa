@@ -9,8 +9,9 @@ table). This module closes that gap without touching any existing record:
   ``service_other``, ``category``, ``reagent_report``, ``affiliates``, ``setting``,
   ``marzban_panel`` … and any column-listed table that grows a column) are staged in a SEPARATE
   staging table (``TableStats.carry_sql_name``), so the owning module's ``stored_columns``, its
-  records, its checksums and the source fingerprint (hence ``import_id``) are byte-identical to
-  0.7.0. They are written as one extra history record per source row::
+  records and its checksums are byte-identical to 0.7.0. The staged values (never a secret; a
+  minimised column's derivative only) ARE part of the source fingerprint, v3 (hence ``import_id``).
+  They are written as one extra history record per source row::
 
       records/archive/<table>_carried.jsonl          legacy_archive_row        (non-configuration tables)
       records/configuration/<table>_carried.jsonl    legacy_configuration_row  (CONFIGURATION tables)

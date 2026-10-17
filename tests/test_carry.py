@@ -6,6 +6,7 @@ SYNTH_EXTRA_COLUMNS); every value of a column that must be dropped contains ``SY
 
 from __future__ import annotations
 
+import io
 import json
 import re
 import zipfile
@@ -19,7 +20,7 @@ from mirza2nexa.catalogue import CATALOGUE, CarryPlan, TableSpec
 from mirza2nexa.modules import EXPECTED_TABLES, carry
 from mirza2nexa.modules import config_tables as ct
 from mirza2nexa.nxpkg import PackageReader
-from mirza2nexa.synth import SynthSpec, write_zip
+from mirza2nexa.synth import SynthSpec, write_dump, write_zip
 
 USERS = 120
 TELEGRAM_ID = re.compile(r"^[1-9][0-9]{0,19}$")
@@ -259,27 +260,62 @@ def test_manual_reconfiguration_report_names_every_secret_and_no_value(full):
     assert by[("affiliates", "gift_token")]["basis"] == "name_heuristic"
 
 
-def test_carry_changes_no_existing_record_and_no_fingerprint(tmp_path, monkeypatch):
-    """The same dump converted with the carry switched off: identical import_id, fingerprint and
-    byte-identical records in every file the carry does not own."""
+def test_carry_changes_no_existing_record_but_the_fingerprint(tmp_path, monkeypatch):
+    """The same dump converted with the carry switched off: every record file the carry does not own
+    is byte-identical apart from the source fingerprint it names. The fingerprint (v3) covers the
+    carried columns, so it and ``import_id`` differ between carry on and off."""
     zp = tmp_path / "same.zip"
     write_zip(zp, SynthSpec(users=60))
     with_carry = run(tmp_path, zp, ws_name="ws_on")
     monkeypatch.setattr(TableSpec, "carry_plan", lambda self, cols, owned: CarryPlan((), (), (), ()))
     without = run(tmp_path, zp, ws_name="ws_off")
-    assert with_carry.report["import_id"] == without.report["import_id"]
-    assert with_carry.report["source_fingerprint"] == without.report["source_fingerprint"]
+    fp_on, fp_off = with_carry.report["source_fingerprint"], without.report["source_fingerprint"]
+    assert fp_on != fp_off
+    assert with_carry.report["import_id"] != without.report["import_id"]
     on, off = Path(with_carry.stage_dir) / "records", Path(without.stage_dir) / "records"
     owned = {f"{t}.jsonl" for t in ("admin", "botsaz", "logs_api", "topicid")}
     compared = 0
     for p in sorted(off.rglob("*.jsonl")):
         if p.name.endswith("_carried.jsonl") or p.name in owned:
             continue
-        assert p.read_bytes() == (on / p.relative_to(off)).read_bytes(), p.name
+        got = (on / p.relative_to(off)).read_bytes().replace(fp_on.encode(), fp_off.encode())
+        assert p.read_bytes() == got, p.name
         compared += 1
     assert compared >= 20
     extra = sorted(str(p.relative_to(on)) for p in on.rglob("*.jsonl") if not (off / p.relative_to(on)).exists())
     assert extra and all(e.endswith("_carried.jsonl") or Path(e).name in owned for e in extra), extra
+
+
+def _fingerprint_of(tmp_path, name, **kw):
+    zp = tmp_path / f"{name}.zip"
+    write_zip(zp, SynthSpec(users=30, **kw))
+    return run(tmp_path, zp, ws_name=f"ws_{name}").report
+
+
+def test_carried_column_value_is_part_of_the_source_fingerprint(tmp_path):
+    """Fingerprint v3 (owner decision 2026-10-17): two backups identical except one carried,
+    non-secret value (``user.first_name``) are different sources."""
+    from mirza2nexa.staging import FINGERPRINT_VERSION
+
+    assert FINGERPRINT_VERSION.endswith(":v3")
+    one = _fingerprint_of(tmp_path, "one", extra_columns=True)
+    again = _fingerprint_of(tmp_path, "again", extra_columns=True)
+    assert one["source_fingerprint"] == again["source_fingerprint"]
+    assert one["import_id"] == again["import_id"]
+
+    # Same synthetic dump with ONE carried cell (a user's first_name) changed.
+    buf = io.StringIO()
+    write_dump(buf, SynthSpec(users=30, extra_columns=True))
+    sql = buf.getvalue()
+    assert sql.count("'نام7'") == 1
+    zp2 = tmp_path / "changed.zip"
+    with zipfile.ZipFile(zp2, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("backup_2026-10-01.sql", sql.replace("'نام7'", "'نام7-changed'").encode("utf-8"))
+    other = run(tmp_path, zp2, ws_name="ws_changed").report
+    assert other["source_fingerprint"] != one["source_fingerprint"]
+    assert other["import_id"] != one["import_id"]
+    # Nothing else moved: same counts, same readiness.
+    assert other["counts"] == one["counts"]
 
 
 def test_carry_switch_off_in_synth_keeps_old_shape(tmp_path):

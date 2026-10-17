@@ -28,7 +28,7 @@ from .progress import CancelToken, ProgressFn
 from .sensitivity import minimise
 from .sqldump import DumpReader, RowEvent, TableDef, TableEvent, WarningEvent
 
-FINGERPRINT_VERSION = "mirza2nexa-source-fingerprint:v2"
+FINGERPRINT_VERSION = "mirza2nexa-source-fingerprint:v3"
 _BATCH = 2000
 _MASK = (1 << 256) - 1
 
@@ -55,7 +55,8 @@ class TableStats:
     dropped_columns: tuple[str, ...] = ()  # secret columns, never stored
     unmapped_columns: tuple[str, ...] = ()  # undeclared columns of a column-listed spec, not stored
     # ---- carry (contract 1.5.0): columns the owning module does not read, staged SEPARATELY in
-    # ``carry_sql_name`` so ``stored_columns``, ``digest`` and the source fingerprint are unchanged.
+    # ``carry_sql_name`` so ``stored_columns`` and ``digest`` (hence every existing record) are
+    # unchanged. Fingerprint v3 folds them in through ``carry_digest`` (the STAGED values only).
     carried_columns: tuple[str, ...] = ()  # raw (value-redacted when written)
     minimised_columns: tuple[str, ...] = ()  # parse-time derivative only
     carry_heuristic: tuple[str, ...] = ()  # undeclared columns decided by name
@@ -63,6 +64,7 @@ class TableStats:
     carry_key_columns: tuple[str, ...] = ()  # primary key / customer / invoice columns copied for linking
     carry_sql_name: str | None = None
     carry_minimisers: tuple[str | None, ...] = ()  # per staged carry column
+    carry_digest: int = 0  # order-independent multiset hash of staged (minimised) carry rows
 
 
 @dataclass
@@ -246,6 +248,10 @@ class Staging:
             elif kind is not None:
                 text = minimise(kind, text)
             values.append(text)
+        # Same canonical form as ``digest``; only the STAGED values (secrets are never staged,
+        # minimised columns contribute their derivative, never the raw value).
+        stats.carry_digest = (stats.carry_digest + int.from_bytes(
+            hashlib.sha256(rules.js_json(values).encode("utf-8", "surrogatepass")).digest(), "big")) & _MASK
         rows = self._carry_pending[ev.table]
         rows.append((stats.rows, *values))
         if len(rows) >= _BATCH:
@@ -428,6 +434,11 @@ def detect_profile(tables: dict[str, TableStats]) -> SchemaProfile:
     )
 
 
+def carry_columns(stats: TableStats) -> tuple[str, ...]:
+    """The staged carry columns in staging order (keys, verbatim, minimised)."""
+    return stats.carry_key_columns + stats.carried_columns + stats.minimised_columns
+
+
 def source_fingerprint(tables: dict[str, TableStats], profile: SchemaProfile) -> str:
     """Deterministic fingerprint of the *content NEXA reads* plus the whole schema.
 
@@ -435,6 +446,9 @@ def source_fingerprint(tables: dict[str, TableStats], profile: SchemaProfile) ->
     data in a different physical order fingerprints the same. This is **not** byte-equal to
     NEXA's MySQL-side fingerprint (that one hashes ``information_schema`` data types and PK
     order); the importer compares per-record row checksums, which *are* NEXA-compatible.
+
+    v3 (contract 1.5.0) also covers the carried columns: a backup that differs only in a carried
+    value is a different source and gets a different fingerprint (hence ``import_id``).
     """
     body = {
         "v": FINGERPRINT_VERSION,
@@ -443,6 +457,12 @@ def source_fingerprint(tables: dict[str, TableStats], profile: SchemaProfile) ->
             t: {"rows": tables[t].rows, "columns": list(tables[t].stored_columns),
                 "digest": f"{tables[t].digest:064x}"}
             for t in sorted(tables) if tables[t].sql_name
+        },
+        # v3: the carried history columns (staged values) are part of the source.
+        "carry": {
+            t: {"rows": tables[t].rows, "columns": list(carry_columns(tables[t])),
+                "digest": f"{tables[t].carry_digest:064x}"}
+            for t in sorted(tables) if tables[t].carry_sql_name
         },
     }
     return hashlib.sha256(rules.js_json(body).encode()).hexdigest()

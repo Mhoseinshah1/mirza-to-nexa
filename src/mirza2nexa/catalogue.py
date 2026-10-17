@@ -93,8 +93,8 @@ class TableSpec:
     # gateway credentials never reach the staging database even transiently.
     kv_filter: tuple[str, str, frozenset[str]] | None = None
     # Columns carried as supplementary history by the ``carry`` module (contract 1.5.0): staged in a
-    # separate table so the module that owns ``columns`` (its records, checksums and the source
-    # fingerprint) is unchanged. Secret entries are declared so they are dropped *explicitly*.
+    # separate table so the module that owns ``columns`` (its records and checksums) is unchanged;
+    # the staged carry values are folded into the source fingerprint (v3). Secret entries are declared so they are dropped *explicitly*.
     carry: tuple[ColumnSpec, ...] = ()
     # Columns naming the Telegram user a row is about (first one present wins) and the invoice it
     # belongs to; the carry records link to the customer / invoice through them.
