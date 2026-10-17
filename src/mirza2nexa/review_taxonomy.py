@@ -124,7 +124,9 @@ CODES: dict[str, tuple[str, str]] = {
     "TABLE_NEEDS_DECISION": ("settings_decision", OWNER_DECISION),
     "CONFIG_NO_STORABLE_COLUMN": ("settings_decision", RESOLVABLE_BY_CODE),
     "SETTING_MULTIPLE_ROWS": ("settings_decision", ARCHIVE_ONLY),
-    "CONFIG_UNVERIFIED_TABLE_EXCLUDED": ("settings_decision", OWNER_DECISION),
+    "CONFIG_UNVERIFIED_TABLE_EXCLUDED": ("settings_decision", OWNER_DECISION),  # up to 0.7.0
+    "CARRY_UNVERIFIED_TABLE_ARCHIVED": ("settings_decision", OWNER_DECISION),
+    "CARRY_DUPLICATE_PK": ("incomplete_data", ARCHIVE_ONLY),
     "PRODUCT_PROPOSAL_BLOCKED": ("incomplete_data", OWNER_DECISION),
     "AGENT_OWNER_DECISION_REQUIRED": ("agents_pricing", OWNER_DECISION),
     "AGENT_LIMITS_NOT_STAGED": ("agents_pricing", RESOLVABLE_BY_CODE),

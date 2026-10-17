@@ -171,7 +171,9 @@ def test_evidence_secret_columns_are_never_staged(full):
         if spec is not None and spec.columns is not None:
             secret |= {col.name for col in spec.columns if col.sensitivity == SECRET}
             secret = {s for s in secret if not (spec.column(s) and _row_filtered(spec, spec.column(s)))}
-        staged = set(c["stored_columns"]) & secret
+        # neither staged for the owning module nor carried verbatim (a minimised secret, e.g.
+        # botsaz.setting, is staged only as its key names: column_dispositions says "minimised")
+        staged = (set(c["stored_columns"]) | set(c.get("carried_columns", []))) & secret
         if staged:
             leaks[table] = sorted(staged)
     assert not leaks, f"secret columns staged: {leaks}"

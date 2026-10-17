@@ -153,6 +153,8 @@ def cmd_compare(a: argparse.Namespace) -> int:
             rd.mkdir()
             for rel in rep.files:
                 if rel.startswith("records/") and rel.endswith(".jsonl"):
+                    # nested record files (records/agents/…, records/archive/…) need their folder
+                    (ws / rel).parent.mkdir(parents=True, exist_ok=True)
                     with open(ws / rel, "w", encoding="utf-8") as fh:
                         for r in reader.iter_jsonl(rel):
                             fh.write(json.dumps(r, ensure_ascii=False) + "\n")

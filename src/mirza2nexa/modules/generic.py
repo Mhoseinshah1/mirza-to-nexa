@@ -7,6 +7,7 @@ Nothing here is applied to any live NEXA entity: these records are history for o
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 from ..catalogue import ARCHIVE, CATALOGUE, CONFIGURATION, EXCLUDED, REVIEW
@@ -21,6 +22,11 @@ def pk_is_sensitive(pk: tuple[str, ...]) -> bool:
     return any(column_name_is_secret(c) or "code" in c.lower() for c in pk)
 
 
+#: Longest ``legacy:<table>:<pk>`` key kept verbatim; NEXA's limit is 512, and suffixes such as
+#: ``#dup<n>`` still have to fit.
+MAX_KEY_LENGTH = 400
+
+
 def idempotency_key(table: str, stats_pk: tuple[str, ...], row: dict[str, Any], checksum: str,
                     seen: dict[str, int], mask=None) -> tuple[str, str | None]:
     """``legacy:<table>:<pk…>`` when a usable primary key exists, else a content key.
@@ -32,7 +38,12 @@ def idempotency_key(table: str, stats_pk: tuple[str, ...], row: dict[str, Any], 
         pk_text = "|".join(str(row[c]) for c in stats_pk)
         if mask is not None and pk_is_sensitive(stats_pk):
             pk_text = mask(pk_text)
-        return f"legacy:{table}:{pk_text}", pk_text
+        key = f"legacy:{table}:{pk_text}"
+        if len(key) > MAX_KEY_LENGTH:
+            # NEXA refuses a key over 512 characters, and a VARCHAR(500) key can hold one: an oversized
+            # key is replaced by a digest of the same text; the full value stays in source_pk.
+            key = f"legacy:{table}:pkh:{hashlib.sha256(pk_text.encode()).hexdigest()}"
+        return key, pk_text
     n = seen.get(checksum, 0) + 1
     seen[checksum] = n
     return f"legacy:{table}:row:{checksum[:32]}" + (f"#{n}" if n > 1 else ""), None

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import zipfile
@@ -45,8 +46,11 @@ def test_code_primary_key_never_written_in_clear(tmp_path):
                   "INSERT INTO `discount_sell` VALUES ('GIFTSECRET77',10);\n")
     res = run(tmp_path, _zip_sql(tmp_path, sql))
     blob = b"".join(p.read_bytes() for p in res.stage_dir.rglob("*") if p.is_file())
-    blob += json.dumps(res.report).encode()
-    assert b"GIFTSECRET77" not in blob
+    # Owner decision 2026-10-17: a discount_sell code is carried as text in its own field
+    # (`code_text`) and nowhere else — never in a key, provenance, digest input or report.
+    carried = len(re.findall(rb'"code_text":\s*"GIFTSECRET77"', blob))
+    assert blob.count(b"GIFTSECRET77") == carried
+    assert b"GIFTSECRET77" not in json.dumps(res.report).encode()
 
 
 def test_unreadable_domain_table_blocks_instead_of_silently_passing(tmp_path):

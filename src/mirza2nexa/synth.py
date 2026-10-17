@@ -106,6 +106,9 @@ class SynthSpec:
     modules: bool = True
     # rows per domain table relative to users (domain modules interpret it)
     module_scale: float = 1.0
+    # add the deployed fork's columns beyond NEXA's read set (``modules/carry.py``
+    # SYNTH_EXTRA_COLUMNS) to every table that has them, as the FIRST columns of its DDL
+    extra_columns: bool = True
 
 
 @dataclass
@@ -148,6 +151,83 @@ def sql_str(v: str | None) -> str:
     return _sql_str(v)
 
 
+class _ExtraColumnsOut:
+    """Adds extra columns to synthetic tables as they are written: the column definitions go FIRST in
+    ``CREATE TABLE``, and every row of every ``INSERT`` for the table gets their values first (an
+    explicit column list gets their names first). Only this module's own SQL text passes through it."""
+
+    def __init__(self, out, state: SynthState, extra: dict[str, tuple[str, ...]], value):
+        self._out, self._state, self._extra, self._value = out, state, extra, value
+        self._rows: dict[str, int] = {}
+
+    def write(self, text: str) -> None:
+        for table, cols in self._extra.items():
+            head = f"CREATE TABLE `{table}` (\n"
+            if head in text:
+                text = text.replace(head, head + "".join(f"  `{c}` varchar(200) DEFAULT NULL,\n" for c in cols))
+            if f"INSERT INTO `{table}`" in text:
+                text = self._inserts(text, table, cols)
+        self._out.write(text)
+
+    def _values(self, table: str, cols: tuple[str, ...]) -> str:
+        i = self._rows.get(table, 0)
+        self._rows[table] = i + 1
+        return ",".join(_sql_str(self._value(table, c, i, self._state)) for c in cols)
+
+    def _inserts(self, text: str, table: str, cols: tuple[str, ...]) -> str:
+        out: list[str] = []
+        marker = f"INSERT INTO `{table}`"
+        pos = 0
+        while True:
+            at = text.find(marker, pos)
+            if at < 0:
+                out.append(text[pos:])
+                return "".join(out)
+            j = at + len(marker)
+            out.append(text[pos:j])
+            rest = text[j:]
+            stripped = rest.lstrip()
+            if stripped.startswith("("):  # explicit column list
+                k = j + (len(rest) - len(stripped))
+                out.append(text[j:k] + "(" + "".join(f"`{c}`," for c in cols))
+                j = k + 1
+            # rows: '(' at depth 0 outside a quoted literal opens one; ';' at depth 0 ends the statement
+            depth, quote, esc = 0, False, False
+            k = j
+            vstart = text.find("VALUES", j)
+            out.append(text[j:vstart])
+            k = vstart
+            while k < len(text):
+                ch = text[k]
+                if quote:
+                    if esc:
+                        esc = False
+                    elif ch == "\\":
+                        esc = True
+                    elif ch == "'":
+                        quote = False
+                    out.append(ch)
+                elif ch == "'":
+                    quote = True
+                    out.append(ch)
+                elif ch == "(":
+                    out.append(ch)
+                    if depth == 0:
+                        out.append(self._values(table, cols) + ",")
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                    out.append(ch)
+                elif ch == ";" and depth == 0:
+                    out.append(ch)
+                    k += 1
+                    break
+                else:
+                    out.append(ch)
+                k += 1
+            pos = k
+
+
 def write_dump(out, spec: SynthSpec) -> dict[str, int]:
     """Write a synthetic mysqldump to the text stream ``out``. Returns expected aggregates."""
     rng = random.Random(spec.seed)  # noqa: S311 - synthetic data, not security
@@ -156,6 +236,10 @@ def write_dump(out, spec: SynthSpec) -> dict[str, int]:
            "invoices": 0, "products": spec.products}
 
     state = SynthState(spec=spec, exp=exp, product_codes=[f"p{i:03d}" for i in range(1, spec.products + 1)])
+    if spec.extra_columns:
+        from .modules.carry import SYNTH_EXTRA_COLUMNS, synth_value
+
+        out = _ExtraColumnsOut(out, state, SYNTH_EXTRA_COLUMNS, synth_value)
     out.write(DDL_PRODUCT)
     rows = []
     for i in range(1, spec.products + 1):

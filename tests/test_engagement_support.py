@@ -54,11 +54,14 @@ def test_discount_codes_never_exported_in_plaintext(conv):
     blob = b"".join(p.read_bytes() for p in (res.stage_dir / "records").rglob("*") if p.is_file())
     reports = "\n".join(_report_texts(res))
     for code in PLAINTEXT_CODES:
-        assert code.encode() not in blob, code
+        # the fork's discount_sell code travels as text in its own record (owner decision)
+        if code != "SYNFORK5":
+            assert code.encode() not in blob, code
         assert code not in reports, code
     discounts = recs(res, "engagement", "discounts")
     for d in discounts:
-        assert d["code_plaintext_exported"] is False
+        # owner decision 2026-10-17: only the fork's discount_sell codes are carried as text
+        assert d["code_plaintext_exported"] is (d["source_table"] == "discount_sell")
         if d["source_table"] in {"Discount", "DiscountSell"}:
             assert d["code_ref"] is None and d["usage_link"] == "UNAVAILABLE_CODE_SECRET"
         else:  # fork table: staged by the generic filter, exported only as a digest
@@ -69,7 +72,10 @@ def test_discount_codes_never_exported_in_plaintext(conv):
     reader = PackageReader(res.package_path, key=res.key_text, workdir=tmp / "verify-codes")
     reader.verify()
     for row in reader.iter_jsonl("records/engagement/discounts.jsonl"):
-        assert not any(c in str(row) for c in PLAINTEXT_CODES)
+        carried = row.get("code_text")
+        rest = {k: v for k, v in row.items() if k != "code_text"}
+        assert not any(c in str(rest) for c in PLAINTEXT_CODES)
+        assert carried is None or (row["source_table"] == "discount_sell" and carried in PLAINTEXT_CODES)
 
 
 def test_discount_state_and_usage_history(conv):
@@ -381,3 +387,17 @@ def test_state_sections_deterministic(tmp_path):
     ra = (a.stage_dir / "reports" / "review-queue.jsonl").read_bytes()
     rb = (b.stage_dir / "reports" / "review-queue.jsonl").read_bytes()
     assert ra == rb
+
+
+def test_fork_discount_codes_carried_as_text_by_owner_decision(conv):
+    # Owner decision 2026-10-17: only the fork's `discount_sell` codes travel as text (NEXA
+    # recreates them DISABLED); documented tables and the usage table keep code_ref only.
+    res, _tmp = conv
+    discounts = recs(res, "engagement", "discounts")
+    fork = [d for d in discounts if d["source_table"] == "discount_sell"]
+    assert fork and all(d["code_plaintext_exported"] and d.get("code_text") for d in fork)
+    for d in discounts:
+        if d["source_table"] != "discount_sell":
+            assert "code_text" not in d and d["code_plaintext_exported"] is False
+    for u in recs(res, "engagement", "discount_usage"):
+        assert "code_text" not in u

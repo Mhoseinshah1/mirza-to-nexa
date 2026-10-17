@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from conftest import make_backup, run
-from mirza2nexa.catalogue import CATALOGUE, CONFIGURATION, EXCLUDED, REVIEW, SECRET
+from mirza2nexa.catalogue import ARCHIVE, CATALOGUE, CONFIGURATION, EXCLUDED, REVIEW, SECRET
 from mirza2nexa.modules import config_tables as ct
 from mirza2nexa.nxpkg import PackageReader
 
@@ -17,11 +17,14 @@ EXPECTED_CLASS = {
     "setting": CONFIGURATION, "PaySetting": CONFIGURATION, "shopSetting": CONFIGURATION,
     "textbot": CONFIGURATION, "channels": CONFIGURATION, "help": CONFIGURATION, "app": CONFIGURATION,
     "protocol": CONFIGURATION, "help_category": REVIEW, "botsaz_help": REVIEW,
-    "card_number": EXCLUDED, "logs_api": EXCLUDED, "admin": EXCLUDED, "botsaz": EXCLUDED, "topicid": EXCLUDED,
-    "global_hidden_gateways": EXCLUDED, "ai_business_chat": EXCLUDED,
+    "card_number": EXCLUDED,
+    # EXCLUDED up to 0.7.0; carried by modules/carry.py since 0.8.0 (contract 1.5.0)
+    "logs_api": ARCHIVE, "admin": ARCHIVE, "botsaz": ARCHIVE, "topicid": ARCHIVE,
+    "global_hidden_gateways": ARCHIVE, "ai_business_chat": ARCHIVE,
 }
+CARRY_OWNED = {"logs_api", "admin", "botsaz", "topicid", "global_hidden_gateways", "ai_business_chat"}
 #: Fork tables without DDL: generic specs (columns come from the runtime DDL, name-filtered).
-GENERIC_TABLES = {"help_category", "botsaz_help", "global_hidden_gateways", "ai_business_chat"}
+GENERIC_TABLES = {"help_category", "botsaz_help"}
 
 # Columns that authenticate (or identify a payout destination) and must never be staged.
 SECRET_COLUMNS = {
@@ -65,10 +68,12 @@ def test_classification(table, klass):
     spec = CATALOGUE.lookup(table)
     assert spec is not None, table
     assert spec.klass == klass
-    assert spec.module == "config_tables"
+    assert spec.module == ("carry" if table in CARRY_OWNED else "config_tables")
     assert spec.reason and spec.purpose_fa
     assert spec.evidence, f"{table} must cite evidence"
     assert (spec.columns is None) == (table in GENERIC_TABLES), table
+    if table in CARRY_OWNED:  # everything goes through the carry plan; nothing is staged for another module
+        assert spec.columns == ()
 
 
 @pytest.mark.parametrize(("table", "cols"), sorted(SECRET_COLUMNS.items()))
@@ -93,11 +98,16 @@ def test_help_category_is_generic_with_secret_name_filter():
 
 
 @pytest.mark.parametrize("table", ["global_hidden_gateways", "ai_business_chat"])
-def test_unverified_excluded_tables_store_nothing(table):
+def test_unverified_tables_are_carried_by_the_name_rule(table):
+    from mirza2nexa.modules import carry
+
     spec = CATALOGUE.lookup(table)
-    stored, _dropped, _unmapped = spec.storable_columns(("id", "gateway", "message", "api_key"))
-    assert stored == ()
-    assert table in ct.UNVERIFIED_EXCLUDED
+    cols = ("id", "gateway", "message", "api_key")
+    stored, dropped, unmapped = spec.storable_columns(cols)
+    assert stored == () == dropped and unmapped == ()
+    plan = spec.carry_plan(cols, ())
+    assert set(plan.carried) == {"id", "gateway", "message"} and plan.dropped == ("api_key",)
+    assert table in carry.UNVERIFIED_TABLES and not ct.UNVERIFIED_EXCLUDED
 
 
 def test_new_fork_tables_are_in_evidence_and_expected_tables():
@@ -127,11 +137,15 @@ def test_secret_columns_never_staged(converted, table, cols):
     _res, _files, coverage = converted
     cov = coverage[table]
     assert not (set(cov["stored_columns"]) & cols), cov["stored_columns"]
+    assert not (set(cov["carried_columns"]) & cols), cov["carried_columns"]
     if cov["class"] == EXCLUDED:
         assert cov["stored_columns"] == []
         assert cov["skipped"] == cov["rows"] and cov["status"] == "excluded"
     else:
-        assert cols <= set(cov["dropped_secret_columns"]), cov["dropped_secret_columns"]
+        # a minimised secret (botsaz.setting, logs_api.data) is staged only as its key names
+        assert cols <= set(cov["dropped_secret_columns"]) | set(cov["minimised_columns"]), cov
+        for c in cols & set(cov["minimised_columns"]):
+            assert cov["column_dispositions"][c] == "minimised"
 
 
 def test_excluded_tables_produce_no_records(converted):
@@ -156,9 +170,15 @@ def test_configuration_exports_only_allow_listed_columns(converted):
             assert set(r["fields"]) <= allowed, (table, set(r["fields"]) - allowed)
 
 
-def test_setting_unknown_column_not_exported(converted):
+def test_setting_unknown_column_carried_by_name_rule(converted):
     _res, files, coverage = converted
-    assert "zz_future_column" in coverage["setting"]["unmapped_columns"]
+    cov = coverage["setting"]
+    assert cov["unmapped_columns"] == [] and cov["unaccounted_columns"] == []
+    assert {"zz_future_column", "ai_status"} <= set(cov["carried_columns"])
+    assert {"jwt_secret", "ai_api_key", "webhook_secret"} <= set(cov["dropped_secret_columns"])
+    (sup,) = _jsonl(files, "records/configuration/setting_carried.jsonl")
+    assert sup["record_type"] == "legacy_configuration_row" and sup["fields"]["zz_future_column"] == "future"
+    assert not {"jwt_secret", "ai_api_key", "webhook_secret"} & set(sup["fields"])
     (rec,) = _jsonl(files, "records/configuration/setting.jsonl")
     assert "zz_future_column" not in rec["fields"] and "webhook_secret" not in rec["fields"]
     assert rec["fields"]["Bot_Status"] == "botstatuson"
@@ -189,6 +209,11 @@ def test_paysetting_secret_keys_dropped_and_reported(converted):
         "cardnumber", "namecard", "CartDirect", "merchant_zarinpal", "apinowpayment", "variza_api_token",
         "variza_webhook_secret", "walletaddress", "perfectmoney_PassPhrase"}
     assert cov["dropped_unknown_keys"] == 1  # zz_undocumented_gateway_key: unknown ⇒ dropped
+    # ...and named (never its value) so the operator knows which setting to review or re-enter
+    assert cov["dropped_unknown_key_names"] == ["zz_undocumented_gateway_key"]
+    manual = json.loads(files["reports/manual-reconfiguration.json"])
+    unknown = [i for i in manual["items"] if i["category"] == "unknown_setting"]
+    assert {(i["table"], i["key"]) for i in unknown} >= {("PaySetting", "zz_undocumented_gateway_key")}
     recs = {r["fields"]["NamePay"]: r["fields"]["ValuePay"] for r in _jsonl(files, "records/configuration/PaySetting.jsonl")}
     assert recs["minbalance"] == "20000"
     # tutorial text is allow-listed, but the card number and password inside it are redacted
@@ -253,7 +278,7 @@ _FORK_DDL = (
 def _with_extra_sql(tmp: Path, extra: str, name: str) -> Path:
     src, _ = make_backup(tmp, users=40, name=f"src-{name}")
     with zipfile.ZipFile(src) as zf:
-        (entry,) = [n for n in zf.namelist() if n.endswith(".sql")]
+        (entry,) = (n for n in zf.namelist() if n.endswith(".sql"))
         sql = zf.read(entry)
     out = tmp / name
     with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -282,15 +307,23 @@ def test_fork_tables_non_empty(tmp_path):
     assert cov["botsaz_help"]["status"] == "review" and cov["botsaz_help"]["archived"] == 1
     assert "bot_token" in cov["botsaz_help"]["dropped_secret_columns"]
     for t in ("global_hidden_gateways", "ai_business_chat"):
-        assert cov[t]["status"] == "excluded" and cov[t]["stored_columns"] == [] and cov[t]["skipped"] == 1
+        assert cov[t]["status"] == "archived" and cov[t]["stored_columns"] == [] and cov[t]["archived"] == 1
+        assert cov[t]["unaccounted_columns"] == []
+    assert cov["ai_business_chat"]["carried_columns"] == ["id", "id_user", "message"]
+    assert cov["ai_business_chat"]["dropped_secret_columns"] == ["api_key"]
     reader = PackageReader(res.package_path, key=res.key_text, workdir=tmp_path / "verify")
     reader.verify()
     with zipfile.ZipFile(reader.payload_path) as zf:
         files = {n: zf.read(n) for n in zf.namelist()}
     reader.cleanup()
     review = _jsonl(files, "reports/review-queue.jsonl")
-    flagged = {r["source_ref"]["table"] for r in review if r["code"] == "CONFIG_UNVERIFIED_TABLE_EXCLUDED"}
+    flagged = {r["source_ref"]["table"] for r in review if r["code"] == "CARRY_UNVERIFIED_TABLE_ARCHIVED"}
     assert flagged == {"global_hidden_gateways", "ai_business_chat"}
+    (chat,) = _jsonl(files, "records/archive/ai_business_chat.jsonl")
+    assert chat["fields"] == {"id": "1", "id_user": "7000000001", "message": "سلام"}
+    assert chat["customer"]["telegram_user_id"] == "7000000001"
+    (gw,) = _jsonl(files, "records/archive/global_hidden_gateways.jsonl")
+    assert gw["fields"] == {"id": "1", "gateway": "zarinpal"}
     (rec,) = _jsonl(files, "records/archive/botsaz_help.jsonl")
     assert set(rec["fields"]) == {"id", "id_user", "text"}
     blob = b"".join(files.values()).decode("utf-8", "replace")

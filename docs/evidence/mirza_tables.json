@@ -1329,8 +1329,8 @@
   },
   "time_columns": {},
   "money_columns": {},
-  "recommended_class": "EXCLUDED",
-  "class_reason": "Contains password hashes; admins are re-created in NEXA by hand (NEXA has its own RBAC + 2FA).",
+  "recommended_class": "ARCHIVE",
+  "class_reason": "Converter 0.8.0 / contract 1.5.0 (owner goal: nothing silently dropped): ARCHIVE through modules/carry.py; non-secret columns carried, credential columns dropped and named in reports/manual-reconfiguration.json, personal request data minimised at parse time. Until 0.7.0: Contains password hashes; admins are re-created in NEXA by hand (NEXA has its own RBAC + 2FA).",
   "nexa_inventory_class_proposal": "SECRETS_MANUAL",
   "nexa_inventory_note": "holds secret columns (NEXA OQ-MZ-INV-02: a table holding any secret is SECRETS_MANUAL); names and counts only",
   "nexa_target": "NEXA admins (nexa-bot@9e604de apps/api/drizzle/0005_identity_and_rbac.sql:47) — manual; nexa-bot@9e604de docs/legacy-migration/table-inventory.md:116-118 (secrets are never imported; reconfigured by hand)",
@@ -4056,8 +4056,8 @@
    }
   },
   "money_columns": {},
-  "recommended_class": "EXCLUDED",
-  "class_reason": "Bot tokens and webhook secrets; NEXA re-creates bots by hand.",
+  "recommended_class": "ARCHIVE",
+  "class_reason": "Converter 0.8.0 / contract 1.5.0 (owner goal: nothing silently dropped): ARCHIVE through modules/carry.py; non-secret columns carried, credential columns dropped and named in reports/manual-reconfiguration.json, personal request data minimised at parse time. Until 0.7.0: Bot tokens and webhook secrets; NEXA re-creates bots by hand.",
   "nexa_inventory_class_proposal": "SECRETS_MANUAL",
   "nexa_inventory_note": "holds secret columns (NEXA OQ-MZ-INV-02: a table holding any secret is SECRETS_MANUAL); names and counts only",
   "nexa_target": "NEXA bot_instances (nexa-bot@9e604de apps/api/drizzle/0000_foundation.sql:31) — manual; nexa-bot@9e604de docs/legacy-migration/table-inventory.md:116-118 (secrets are never imported; reconfigured by hand)",
@@ -4257,8 +4257,8 @@
    }
   },
   "money_columns": {},
-  "recommended_class": "EXCLUDED",
-  "class_reason": "Operational log with IPs and request bodies (may include tokens in body or other headers).",
+  "recommended_class": "ARCHIVE",
+  "class_reason": "Converter 0.8.0 / contract 1.5.0 (owner goal: nothing silently dropped): ARCHIVE through modules/carry.py; non-secret columns carried, credential columns dropped and named in reports/manual-reconfiguration.json, personal request data minimised at parse time. Until 0.7.0: Operational log with IPs and request bodies (may include tokens in body or other headers).",
   "nexa_inventory_class_proposal": "SECRETS_MANUAL",
   "nexa_inventory_note": "holds secret columns (NEXA OQ-MZ-INV-02: a table holding any secret is SECRETS_MANUAL); names and counts only",
   "nexa_target": "none",
@@ -5032,8 +5032,8 @@
   },
   "time_columns": {},
   "money_columns": {},
-  "recommended_class": "EXCLUDED",
-  "class_reason": "Bound to the old Telegram group; NEXA has its own ops log topics.",
+  "recommended_class": "ARCHIVE",
+  "class_reason": "Converter 0.8.0 / contract 1.5.0 (owner goal: nothing silently dropped): ARCHIVE through modules/carry.py; non-secret columns carried, credential columns dropped and named in reports/manual-reconfiguration.json, personal request data minimised at parse time. Until 0.7.0: Bound to the old Telegram group; NEXA has its own ops log topics.",
   "nexa_inventory_class_proposal": "OWNER_DECISION",
   "nexa_inventory_note": "",
   "nexa_target": "NEXA ops_log_topics (nexa-bot@9e604de apps/api/drizzle/0136_wpa4_ops_log_group.sql:40) — manual",
@@ -5841,8 +5841,8 @@
   "vocabularies": {},
   "time_columns": {},
   "money_columns": {},
-  "recommended_class": "EXCLUDED",
-  "class_reason": "Presumed personal free text with no NEXA target; AI integrations commonly store provider API keys/prompts beside the log. Excluded (counted only); a non-empty instance raises CONFIG_UNVERIFIED_TABLE_EXCLUDED for an owner decision.",
+  "recommended_class": "ARCHIVE",
+  "class_reason": "Converter 0.8.0 / contract 1.5.0 (owner goal: nothing silently dropped): ARCHIVE through modules/carry.py; non-secret columns carried, credential columns dropped and named in reports/manual-reconfiguration.json, personal request data minimised at parse time. Until 0.7.0: Presumed personal free text with no NEXA target; AI integrations commonly store provider API keys/prompts beside the log. Excluded (counted only); a non-empty instance raises CONFIG_UNVERIFIED_TABLE_EXCLUDED for an owner decision.",
   "nexa_inventory_class_proposal": "EXCLUDED",
   "nexa_inventory_note": "present but empty in the real backup; classification rests on the name only",
   "nexa_target": "none",
@@ -5901,8 +5901,221 @@
   "vocabularies": {},
   "time_columns": {},
   "money_columns": {},
-  "recommended_class": "EXCLUDED",
-  "class_reason": "Payment-gateway configuration is secret-bearing in Mirza (PaySetting stores credentials beside switches, mirza_pro@b645db7 db/tables/PaySetting.php:7-110); presumed secret, excluded (counted only); a non-empty instance raises CONFIG_UNVERIFIED_TABLE_EXCLUDED.",
+  "recommended_class": "ARCHIVE",
+  "class_reason": "Converter 0.8.0 / contract 1.5.0 (owner goal: nothing silently dropped): ARCHIVE through modules/carry.py; non-secret columns carried, credential columns dropped and named in reports/manual-reconfiguration.json, personal request data minimised at parse time. Until 0.7.0: Payment-gateway configuration is secret-bearing in Mirza (PaySetting stores credentials beside switches, mirza_pro@b645db7 db/tables/PaySetting.php:7-110); presumed secret, excluded (counted only); a non-empty instance raises CONFIG_UNVERIFIED_TABLE_EXCLUDED.",
+  "nexa_inventory_class_proposal": "EXCLUDED",
+  "nexa_inventory_note": "present but empty in the real backup; classification rests on the name only",
+  "nexa_target": "none (NEXA gateways configured by hand)",
+  "open_questions": [
+   "Supply column names (CREATE TABLE header; no values) if the table is ever non-empty."
+  ],
+  "evidence_search": "Searched botmirzapanel@92c0ed0, mirza_pro@b645db7 (all files) and nexa-bot@9e604de (all files) for the table name: no match."
+ },
+ {
+  "table": "api_key",
+  "aliases": [],
+  "found_in": [
+   "real backup 2026-10-17 (empty)"
+  ],
+  "public_ddl": false,
+  "rows_operator_report": 0,
+  "columns": [
+   {
+    "name": "id",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "name",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "token_hash",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "secret",
+    "notes": "credential: dropped"
+   },
+   {
+    "name": "token_prefix",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "secret",
+    "notes": "credential: dropped"
+   },
+   {
+    "name": "permissions",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "status",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "created_at",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "last_used_at",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   }
+  ],
+  "primary_key": "id",
+  "unique_keys": [],
+  "purpose": "API access keys of the deployed fork (names/permissions/status); key material is a credential.",
+  "written_by": [
+   "UNKNOWN (not in any public source)"
+  ],
+  "relations": [],
+  "vocabularies": {},
+  "time_columns": {},
+  "money_columns": {},
+  "recommended_class": "ARCHIVE",
+  "class_reason": "Converter 0.8.0: ARCHIVE through modules/carry.py; credential columns dropped (api_key.token_hash, token_prefix).",
+  "nexa_inventory_class_proposal": "EXCLUDED",
+  "nexa_inventory_note": "present but empty in the real backup; classification rests on the name only",
+  "nexa_target": "none (NEXA gateways configured by hand)",
+  "open_questions": [
+   "Supply column names (CREATE TABLE header; no values) if the table is ever non-empty."
+  ],
+  "evidence_search": "Searched botmirzapanel@92c0ed0, mirza_pro@b645db7 (all files) and nexa-bot@9e604de (all files) for the table name: no match."
+ },
+ {
+  "table": "custom_button",
+  "aliases": [],
+  "found_in": [
+   "real backup 2026-10-17 (empty)"
+  ],
+  "public_ddl": false,
+  "rows_operator_report": 0,
+  "columns": [
+   {
+    "name": "id",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "title",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "type",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "content_type",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "content_text",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "file_id",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "url",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "status",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "created_at",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   }
+  ],
+  "primary_key": "id",
+  "unique_keys": [],
+  "purpose": "Operator-defined bot menu buttons of the deployed fork.",
+  "written_by": [
+   "UNKNOWN (not in any public source)"
+  ],
+  "relations": [],
+  "vocabularies": {},
+  "time_columns": {},
+  "money_columns": {},
+  "recommended_class": "ARCHIVE",
+  "class_reason": "Converter 0.8.0: ARCHIVE through modules/carry.py; credential columns dropped (api_key.token_hash, token_prefix).",
   "nexa_inventory_class_proposal": "EXCLUDED",
   "nexa_inventory_note": "present but empty in the real backup; classification rests on the name only",
   "nexa_target": "none (NEXA gateways configured by hand)",

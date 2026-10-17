@@ -90,6 +90,10 @@ from .agents import (
 from .base import Module, ModuleContext, register_module
 
 CODE_COLUMNS = ("code", "codeDiscount", "discount_code", "code_discount", "coupon", "gift_code")
+# Owner decision (2026-10-17): the deployed fork's discount codes are carried as text so NEXA can
+# recreate them DISABLED for review. Only `discount_sell` (the code list itself); the usage table
+# and every other code stay `code_ref` only. The record says so (`code_text_carried`).
+CODE_TEXT_TABLES = frozenset({"discount_sell"})
 FLAGS_OFF = {"redeemable": False, "grants_credit": False, "affects_wallet": False, "applies_to_live_state": False}
 _LIABILITY_Q = ("OQ-M2N-EN-02: unredeemed codes are an outstanding bearer liability in Mirza; does the owner "
                 "honour any of them in NEXA (as new NEXA codes), or let them lapse at cutover?")
@@ -330,9 +334,13 @@ def _discounts(ctx: ModuleContext, usage: dict[str, int], rec_out: dict[str, Any
             consumed = usage.get(code, 0) if code is not None else None
             rec = _rec("legacy_discount_code", "m2n.engagement.discount.v1", key, stats.name, pk)
             rec.update({"kind": kind, "code_ref": None if documented else code_ref(ctx, code),
-                        "code_staged": not documented, "code_plaintext_exported": False,
+                        "code_staged": not documented,
+                        "code_plaintext_exported": stats.name in CODE_TEXT_TABLES and code is not None,
                         "consumed_rows": consumed,
                         "usage_link": "UNAVAILABLE_CODE_SECRET" if documented else "EXACT_STRING_DIGEST"})
+            if stats.name in CODE_TEXT_TABLES and code is not None:
+                # owner decision: NEXA recreates the code DISABLED; never redeemable from here
+                rec["code_text"] = str(code)
             state = "UNKNOWN"
             life, reason, remaining, outstanding = UNKNOWN, "FORK_SCHEMA_UNPROVEN", None, None
             if stats.spec_name == "Discount":

@@ -16,6 +16,7 @@ from ..errors import MigrationError
 from . import (  # noqa: F401
     adoption,
     agents,
+    carry,
     config_tables,
     core_specs,
     engagement,
@@ -28,10 +29,13 @@ from . import (  # noqa: F401
 )
 from .base import _MODULES, Module, ModuleContext, modules_in_order, register_module
 
+# Supplement columns are attached to the specs the other modules registered, so this runs last.
+carry.apply_supplements()
+
 #: Converter modules that MUST be registered for a conversion to start.
 EXPECTED_MODULES: frozenset[str] = frozenset({
     "generic", "payments", "wallet_history", "services_ext", "agents", "engagement", "support", "config_tables",
-    "adoption", "ownership",
+    "adoption", "ownership", "carry",
 })
 
 #: Every Mirza table the catalogue MUST know (docs/evidence/mirza_tables.json + ``protocol``).
@@ -39,7 +43,7 @@ EXPECTED_MODULES: frozenset[str] = frozenset({
 EXPECTED_TABLES: frozenset[str] = frozenset({
     "Discount", "DiscountSell", "Giftcodeconsumed", "PaySetting", "Payment_report", "Requestagent", "ad_campaign",
     "admin", "affiliates", "agent_invoice", "agent_log", "agent_manage", "agent_usage_snapshot", "ai_business_chat",
-    "app", "botsaz", "botsaz_help", "global_hidden_gateways",
+    "api_key", "app", "botsaz", "botsaz_help", "custom_button", "global_hidden_gateways",
     "cancel_service", "card_number", "category", "channels", "custom_service_tier_prices", "departman",
     "discount_sell", "discount_sell_used", "help", "help_category", "invoice", "logs_api", "manualsell",
     "marzban_panel", "product", "protocol", "reagent_report", "requestagent", "service_other", "setting",

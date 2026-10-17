@@ -25,9 +25,10 @@ from .catalogue import CATALOGUE, EXCLUDED
 from .errors import SchemaUnknown
 from .mapping import rules
 from .progress import CancelToken, ProgressFn
+from .sensitivity import minimise
 from .sqldump import DumpReader, RowEvent, TableDef, TableEvent, WarningEvent
 
-FINGERPRINT_VERSION = "mirza2nexa-source-fingerprint:v2"
+FINGERPRINT_VERSION = "mirza2nexa-source-fingerprint:v3"
 _BATCH = 2000
 _MASK = (1 << 256) - 1
 
@@ -53,6 +54,17 @@ class TableStats:
     primary_key: tuple[str, ...] = ()
     dropped_columns: tuple[str, ...] = ()  # secret columns, never stored
     unmapped_columns: tuple[str, ...] = ()  # undeclared columns of a column-listed spec, not stored
+    # ---- carry (contract 1.5.0): columns the owning module does not read, staged SEPARATELY in
+    # ``carry_sql_name`` so ``stored_columns`` and ``digest`` (hence every existing record) are
+    # unchanged. Fingerprint v3 folds them in through ``carry_digest`` (the STAGED values only).
+    carried_columns: tuple[str, ...] = ()  # raw (value-redacted when written)
+    minimised_columns: tuple[str, ...] = ()  # parse-time derivative only
+    carry_heuristic: tuple[str, ...] = ()  # undeclared columns decided by name
+    carry_secret_columns: tuple[str, ...] = ()  # secret columns the carry plan dropped (never staged)
+    carry_key_columns: tuple[str, ...] = ()  # primary key / customer / invoice columns copied for linking
+    carry_sql_name: str | None = None
+    carry_minimisers: tuple[str | None, ...] = ()  # per staged carry column
+    carry_digest: int = 0  # order-independent multiset hash of staged (minimised) carry rows
 
 
 @dataclass
@@ -84,6 +96,8 @@ class Staging:
         self._pending: dict[str, list[tuple]] = {}
         self._kv: dict[str, tuple[int, int, frozenset[str]]] = {}
         self._colidx_cache: dict[tuple[str, tuple[str, ...]], list[int | None]] = {}
+        self._carry_pending: dict[str, list[tuple]] = {}
+        self._carry_idx_cache: dict[tuple[str, tuple[str, ...]], list[int | None]] = {}
         self.conn.execute("CREATE TABLE trial_user (id TEXT PRIMARY KEY) WITHOUT ROWID")
 
     # ---- schema --------------------------------------------------------------------
@@ -116,6 +130,8 @@ class Staging:
             stats.classified = True
             stored, dropped, unmapped = spec.storable_columns(cols)
             stats.stored_columns, stats.dropped_columns, stats.unmapped_columns = stored, dropped, unmapped
+            owned = tuple(c for c in cols if spec.columns is None or spec.main_column(c) is not None)
+            self._plan_carry(stats, spec, cols, owned)
             if stored and spec.klass != EXCLUDED:
                 stats.sql_name = f"t{len(self._pending)}"
                 coldefs = ", ".join(f"{_q('c_' + c)} TEXT" for c in stored)
@@ -131,12 +147,40 @@ class Staging:
             wanted = rules.REQUIRED_COLUMNS[t.name] + rules.OPTIONAL_COLUMNS[t.name]
             stats.stored_columns = tuple(c for c in wanted if c in cols)
             stats.dropped_columns = stats.never_read_present
+            if spec is not None:
+                owned = tuple(c for c in cols if c in wanted or c in rules.NEVER_READ[t.name])
+                self._plan_carry(stats, spec, cols, owned)
             if not stats.missing_required:
                 stats.sql_name = "src_" + t.name
                 coldefs = ", ".join(f"{_q('c_' + c)} TEXT" for c in stats.stored_columns)
                 self.conn.execute(f"CREATE TABLE {_q(stats.sql_name)} (rowno INTEGER PRIMARY KEY, {coldefs})")
                 self._pending[t.name] = []
         self.tables[t.name] = stats
+
+    def _plan_carry(self, stats: TableStats, spec: Any, cols: tuple[str, ...], owned: tuple[str, ...]) -> None:
+        plan = spec.carry_plan(cols, owned)
+        stats.carried_columns, stats.minimised_columns = plan.carried, plan.minimised
+        # Kept apart from ``dropped_columns``: existing records that list their table's dropped
+        # columns (e.g. panel_registry) must stay byte-identical to 0.7.0.
+        stats.carry_heuristic, stats.carry_secret_columns = plan.heuristic, plan.dropped
+        if not (plan.carried or plan.minimised):
+            return
+        payload = plan.carried + plan.minimised
+        secret = set(stats.dropped_columns) | set(plan.dropped)
+        wanted_keys = tuple(stats.primary_key or spec.primary_key) + tuple(
+            c for c in spec.customer_columns if c in cols)[:1] + ((spec.invoice_column,) if spec.invoice_column else ())
+        keys = tuple(dict.fromkeys(c for c in wanted_keys if c in cols and c not in secret and c not in payload))
+        stats.carry_key_columns = keys
+        minimisers: list[str | None] = [None] * (len(keys) + len(plan.carried))
+        minimisers += [spec.carry_column(c).minimise for c in plan.minimised]
+        stats.carry_minimisers = tuple(minimisers)
+        stats.carry_sql_name = f"x{len(self._carry_pending)}"
+        coldefs = ", ".join(f"{_q('c_' + c)} TEXT" for c in keys + payload)
+        self.conn.execute(f"CREATE TABLE {_q(stats.carry_sql_name)} (rowno INTEGER PRIMARY KEY, {coldefs})")
+        self._carry_pending[stats.name] = []
+
+    def carry_columns_of(self, stats: TableStats) -> tuple[str, ...]:
+        return stats.carry_key_columns + stats.carried_columns + stats.minimised_columns
 
     # ---- rows ----------------------------------------------------------------------
     def on_row(self, ev: RowEvent) -> None:
@@ -149,6 +193,8 @@ class Staging:
             stats = TableStats(name=ev.table, columns=ev.columns, column_types={})
             self.tables[ev.table] = stats
         stats.rows += 1
+        if ev.table in self._carry_pending:
+            self._carry_row(stats, ev)
         if ev.table not in self._pending:
             return
         key = (ev.table, ev.columns)
@@ -181,6 +227,47 @@ class Staging:
         if len(self._pending[ev.table]) >= _BATCH:
             self._flush(ev.table)
 
+    def _carry_row(self, stats: TableStats, ev: RowEvent) -> None:
+        key = (ev.table, ev.columns)
+        idx = self._carry_idx_cache.get(key)
+        if idx is None:
+            pos = {c: i for i, c in enumerate(ev.columns)}
+            idx = [pos.get(c) for c in self.carry_columns_of(stats)]
+            self._carry_idx_cache[key] = idx
+        values: list[str | None] = []
+        for i, kind in zip(idx, stats.carry_minimisers, strict=True):
+            if i is None:
+                values.append(None)
+                continue
+            raw = ev.values[i]
+            text = rules.cell_text(raw)
+            if text is None and raw is not None:
+                # Not counted as UNREPRESENTABLE_CELLS: the carry is history beside the converted
+                # records; the record says the value was not representable instead of blocking.
+                text = "\x00UNREPRESENTABLE"
+            elif kind is not None:
+                text = minimise(kind, text)
+            values.append(text)
+        # Same canonical form as ``digest``; only the STAGED values (secrets are never staged,
+        # minimised columns contribute their derivative, never the raw value).
+        stats.carry_digest = (stats.carry_digest + int.from_bytes(
+            hashlib.sha256(rules.js_json(values).encode("utf-8", "surrogatepass")).digest(), "big")) & _MASK
+        rows = self._carry_pending[ev.table]
+        rows.append((stats.rows, *values))
+        if len(rows) >= _BATCH:
+            self._flush_carry(ev.table)
+
+    def _flush_carry(self, table: str) -> None:
+        rows = self._carry_pending[table]
+        if not rows:
+            return
+        stats = self.tables[table]
+        placeholders = ", ".join("?" for _ in range(len(stats.carry_minimisers) + 1))
+        self.conn.execute("BEGIN")
+        self.conn.executemany(f"INSERT INTO {_q(stats.carry_sql_name)} VALUES ({placeholders})", rows)  # noqa: S608 - staging-generated table name, values are bound parameters
+        self.conn.execute("COMMIT")
+        rows.clear()
+
     def _note_trial(self, stats: TableStats, values: list[str | None]) -> None:
         # source-snapshot.ts:296 — any invoice with is_test '1' (trimmed), ANY status.
         cols = stats.stored_columns
@@ -206,6 +293,8 @@ class Staging:
     def finish(self) -> None:
         for t in list(self._pending):
             self._flush(t)
+        for t in list(self._carry_pending):
+            self._flush_carry(t)
         for t in self._pending:
             stats = self.tables[t]
             pk = rules.PRIMARY_KEYS.get(t) if t in rules.SOURCE_TABLES else (
@@ -345,6 +434,11 @@ def detect_profile(tables: dict[str, TableStats]) -> SchemaProfile:
     )
 
 
+def carry_columns(stats: TableStats) -> tuple[str, ...]:
+    """The staged carry columns in staging order (keys, verbatim, minimised)."""
+    return stats.carry_key_columns + stats.carried_columns + stats.minimised_columns
+
+
 def source_fingerprint(tables: dict[str, TableStats], profile: SchemaProfile) -> str:
     """Deterministic fingerprint of the *content NEXA reads* plus the whole schema.
 
@@ -352,6 +446,9 @@ def source_fingerprint(tables: dict[str, TableStats], profile: SchemaProfile) ->
     data in a different physical order fingerprints the same. This is **not** byte-equal to
     NEXA's MySQL-side fingerprint (that one hashes ``information_schema`` data types and PK
     order); the importer compares per-record row checksums, which *are* NEXA-compatible.
+
+    v3 (contract 1.5.0) also covers the carried columns: a backup that differs only in a carried
+    value is a different source and gets a different fingerprint (hence ``import_id``).
     """
     body = {
         "v": FINGERPRINT_VERSION,
@@ -360,6 +457,12 @@ def source_fingerprint(tables: dict[str, TableStats], profile: SchemaProfile) ->
             t: {"rows": tables[t].rows, "columns": list(tables[t].stored_columns),
                 "digest": f"{tables[t].digest:064x}"}
             for t in sorted(tables) if tables[t].sql_name
+        },
+        # v3: the carried history columns (staged values) are part of the source.
+        "carry": {
+            t: {"rows": tables[t].rows, "columns": list(carry_columns(tables[t])),
+                "digest": f"{tables[t].carry_digest:064x}"}
+            for t in sorted(tables) if tables[t].carry_sql_name
         },
     }
     return hashlib.sha256(rules.js_json(body).encode()).hexdigest()

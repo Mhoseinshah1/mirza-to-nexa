@@ -93,7 +93,7 @@ def _sql() -> str:
 
 def _zip(tmp: Path, name: str = "own.zip") -> Path:
     buf = io.StringIO()
-    write_dump(buf, SynthSpec(users=40, modules=False, invoices_per_user=1.0))
+    write_dump(buf, SynthSpec(users=40, modules=False, invoices_per_user=1.0, extra_columns=False))
     buf.write(_sql())
     path = tmp / name
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -367,7 +367,7 @@ def windows(tmp_path_factory):
                   for i, a, u, v, t in WIN_SO)
     cx = ",".join(f"({i},{q(a)},{q(u)},'0',{q(s)})" for i, a, u, s in WIN_CX)
     buf = io.StringIO()
-    write_dump(buf, SynthSpec(users=40, modules=False, invoices_per_user=1.0))
+    write_dump(buf, SynthSpec(users=40, modules=False, invoices_per_user=1.0, extra_columns=False))
     buf.write(f"INSERT INTO `invoice` VALUES {inv};\n"
               + "DROP TABLE IF EXISTS `service_other`;\n" + sx.DDL["service_other"]
               + f"INSERT INTO `service_other` VALUES {so};\n"
