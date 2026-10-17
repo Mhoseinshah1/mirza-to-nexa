@@ -294,6 +294,27 @@ OWNED_SPECS: tuple[TableSpec, ...] = (
            _c("agent", PUBLIC, _INFER + "agent tier the rule applies to"), _c("created_at")),
           primary_key=("id",), sensitivity=PUBLIC,
           open_questions=("Confirm that code is a gateway identifier and never a key.",)),
+    _spec("api_key", "Mini-app / API access keys (deployed fork, seen 2026-10-17; no public DDL)",
+          "کلیدهای دسترسی API",
+          "Which API keys existed, their names, permissions and status are kept as reference; the key material "
+          "(token_hash, token_prefix) is a credential and is dropped — keys are re-issued in NEXA by hand.",
+          (OPREP,),
+          (_c("id"), _c("name", PUBLIC, "operator label"),
+           _c("token_hash", SECRET, "hash of the API token; a credential verifier. " + _SEC),
+           _c("token_prefix", SECRET, "first characters of the API token. " + _SEC),
+           _c("permissions", PUBLIC, _INFER + "permission list"), _c("status"), _c("created_at"),
+           _c("last_used_at")),
+          primary_key=("id",), sensitivity=PUBLIC),
+    _spec("custom_button", "Operator-defined bot menu buttons (deployed fork, seen 2026-10-17; no public DDL)",
+          "دکمه‌های سفارشی منوی ربات",
+          "Button title, type and content (text, Telegram file id, URL) as configuration reference; NEXA's own "
+          "button builder is configured by hand. Telegram file ids belong to the old bot.",
+          (OPREP,),
+          (_c("id"), _c("title", PUBLIC, "button label"), _c("type"), _c("content_type"),
+           _c("content_text", PUBLIC, "operator text; value-level redaction applies"),
+           _c("file_id", PUBLIC, "Telegram file id of the old bot"), _c("url", PUBLIC, "operator link"),
+           _c("status"), _c("created_at")),
+          primary_key=("id",), sensitivity=PUBLIC),
     _spec("ai_business_chat", "AI assistant chat log (deployed fork only; no public DDL)",
           "گفتگوهای دستیار هوش مصنوعی",
           "Owner decision 2026-10 (\"nothing silently dropped\"): the business-chat history is the owner's own "
@@ -307,7 +328,7 @@ OWNED_SPECS: tuple[TableSpec, ...] = (
 )
 
 #: Owned tables whose classification rests on names only: non-empty → CARRY_UNVERIFIED_TABLE_ARCHIVED.
-UNVERIFIED_TABLES = frozenset({"global_hidden_gateways", "ai_business_chat"})
+UNVERIFIED_TABLES = frozenset({"global_hidden_gateways", "ai_business_chat", "api_key", "custom_button"})
 
 for _s in OWNED_SPECS:
     CATALOGUE.register(_s)

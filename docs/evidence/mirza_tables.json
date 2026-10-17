@@ -5910,5 +5910,218 @@
    "Supply column names (CREATE TABLE header; no values) if the table is ever non-empty."
   ],
   "evidence_search": "Searched botmirzapanel@92c0ed0, mirza_pro@b645db7 (all files) and nexa-bot@9e604de (all files) for the table name: no match."
+ },
+ {
+  "table": "api_key",
+  "aliases": [],
+  "found_in": [
+   "real backup 2026-10-17 (empty)"
+  ],
+  "public_ddl": false,
+  "rows_operator_report": 0,
+  "columns": [
+   {
+    "name": "id",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "name",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "token_hash",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "secret",
+    "notes": "credential: dropped"
+   },
+   {
+    "name": "token_prefix",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "secret",
+    "notes": "credential: dropped"
+   },
+   {
+    "name": "permissions",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "status",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "created_at",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "last_used_at",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   }
+  ],
+  "primary_key": "id",
+  "unique_keys": [],
+  "purpose": "API access keys of the deployed fork (names/permissions/status); key material is a credential.",
+  "written_by": [
+   "UNKNOWN (not in any public source)"
+  ],
+  "relations": [],
+  "vocabularies": {},
+  "time_columns": {},
+  "money_columns": {},
+  "recommended_class": "ARCHIVE",
+  "class_reason": "Converter 0.8.0: ARCHIVE through modules/carry.py; credential columns dropped (api_key.token_hash, token_prefix).",
+  "nexa_inventory_class_proposal": "EXCLUDED",
+  "nexa_inventory_note": "present but empty in the real backup; classification rests on the name only",
+  "nexa_target": "none (NEXA gateways configured by hand)",
+  "open_questions": [
+   "Supply column names (CREATE TABLE header; no values) if the table is ever non-empty."
+  ],
+  "evidence_search": "Searched botmirzapanel@92c0ed0, mirza_pro@b645db7 (all files) and nexa-bot@9e604de (all files) for the table name: no match."
+ },
+ {
+  "table": "custom_button",
+  "aliases": [],
+  "found_in": [
+   "real backup 2026-10-17 (empty)"
+  ],
+  "public_ddl": false,
+  "rows_operator_report": 0,
+  "columns": [
+   {
+    "name": "id",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "title",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "type",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "content_type",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "content_text",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "file_id",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "url",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "status",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   },
+   {
+    "name": "created_at",
+    "type": "UNKNOWN (no public DDL; real backup 2026-10-17 header)",
+    "sources": [
+     "real backup 2026-10-17 (column names only)"
+    ],
+    "sensitivity": "public",
+    "notes": ""
+   }
+  ],
+  "primary_key": "id",
+  "unique_keys": [],
+  "purpose": "Operator-defined bot menu buttons of the deployed fork.",
+  "written_by": [
+   "UNKNOWN (not in any public source)"
+  ],
+  "relations": [],
+  "vocabularies": {},
+  "time_columns": {},
+  "money_columns": {},
+  "recommended_class": "ARCHIVE",
+  "class_reason": "Converter 0.8.0: ARCHIVE through modules/carry.py; credential columns dropped (api_key.token_hash, token_prefix).",
+  "nexa_inventory_class_proposal": "EXCLUDED",
+  "nexa_inventory_note": "present but empty in the real backup; classification rests on the name only",
+  "nexa_target": "none (NEXA gateways configured by hand)",
+  "open_questions": [
+   "Supply column names (CREATE TABLE header; no values) if the table is ever non-empty."
+  ],
+  "evidence_search": "Searched botmirzapanel@92c0ed0, mirza_pro@b645db7 (all files) and nexa-bot@9e604de (all files) for the table name: no match."
  }
 ]
