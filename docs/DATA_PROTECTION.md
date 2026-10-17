@@ -25,6 +25,13 @@ keys, cookies, the business's card numbers, IBAN/Sheba and crypto wallet address
 channel invite links, gift and discount codes (bearer instruments), and request logs. When in
 doubt, a column is `secret`.
 
+**One owner-approved exception (2026-10-17):** the deployed fork's `discount_sell` codes are
+exported as text (`code_text`, with `code_plaintext_exported: true`) so NEXA can recreate them
+**DISABLED**, for the owner to review and enable. They remain bearer secrets while the Mirza bot
+still honours them: the package is encrypted, and it must be handled as a secret until Mirza is
+retired. Every other discount and gift table (`Discount`, `DiscountSell`, `Giftcodeconsumed`,
+the usage table) exports only the keyed `code_ref`, and no report ever names a code.
+
 Two more rules apply:
 
 * **Unknown columns are not staged.** A table with a column list stores only the columns it
@@ -85,7 +92,7 @@ material for the operator only. NEXA never applies them to its live settings.
 
 * **Allow-listed key** (`config_tables.PAYSETTING_ALLOWED` / `SHOPSETTING_ALLOWED`): the row is exported, and its value is redacted.
 * **Known secret key**: the row is dropped. Its *name* is listed in coverage `dropped_secret_keys`.
-* **Unknown key**: the row is dropped and counted in `dropped_unknown_keys`, and the package gets the `CONFIG_UNKNOWN_KEYS_DROPPED` warning. A fork may add keys that hold credentials, so unknown is treated as secret.
+* **Unknown key**: the row is dropped and counted in `dropped_unknown_keys`, and the package gets the `CONFIG_UNKNOWN_KEYS_DROPPED` warning. A fork may add keys that hold credentials, so unknown is treated as secret: its value never leaves, but its *name* is listed in coverage `dropped_unknown_key_names` (at most 200 per table) and in `reports/manual-reconfiguration.json` (category `unknown_setting`), so the operator knows which setting to review.
 
 ## 4. Value-level redaction (`src/mirza2nexa/sensitivity.py`)
 
