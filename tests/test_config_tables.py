@@ -273,7 +273,7 @@ _FORK_DDL = (
 def _with_extra_sql(tmp: Path, extra: str, name: str) -> Path:
     src, _ = make_backup(tmp, users=40, name=f"src-{name}")
     with zipfile.ZipFile(src) as zf:
-        (entry,) = [n for n in zf.namelist() if n.endswith(".sql")]
+        (entry,) = (n for n in zf.namelist() if n.endswith(".sql"))
         sql = zf.read(entry)
     out = tmp / name
     with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
