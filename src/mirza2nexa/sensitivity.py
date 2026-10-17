@@ -158,6 +158,13 @@ def contains_secret(value: str) -> bool:
 # Each derivative is chosen so it cannot carry a credential or the personal value itself.
 
 _KEY_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.\-]{0,63}$")
+#: A key that reads as an opaque token rather than a field name: 20+ characters mixing letters and
+#: digits with no separator-delimited words, e.g. an API key used as a dynamic object key.
+_OPAQUE_KEY = re.compile(r"^(?=.*\d)(?=.*[A-Za-z])[A-Za-z0-9]{20,}$")
+
+
+def _key_name_is_safe(name: str) -> bool:
+    return bool(_KEY_NAME.fullmatch(name)) and not _OPAQUE_KEY.fullmatch(name) and not contains_secret(name)
 
 
 def _ip_family(value: str) -> str:
@@ -179,7 +186,7 @@ def _json_keys(value: str) -> str:
     except (ValueError, RecursionError):
         return json.dumps({"kind": "not_json", "length": len(value)})
     if isinstance(doc, dict):
-        names = sorted(k if _KEY_NAME.fullmatch(k) else "[unusual-key]" for k in doc)
+        names = sorted(k if _key_name_is_safe(k) else "[unusual-key]" for k in doc)
         return json.dumps({"kind": "object", "keys": names[:100], "key_count": len(doc)})
     return json.dumps({"kind": type(doc).__name__ if doc is not None else "null", "length": len(value)})
 
