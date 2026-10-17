@@ -209,6 +209,11 @@ def test_paysetting_secret_keys_dropped_and_reported(converted):
         "cardnumber", "namecard", "CartDirect", "merchant_zarinpal", "apinowpayment", "variza_api_token",
         "variza_webhook_secret", "walletaddress", "perfectmoney_PassPhrase"}
     assert cov["dropped_unknown_keys"] == 1  # zz_undocumented_gateway_key: unknown ⇒ dropped
+    # ...and named (never its value) so the operator knows which setting to review or re-enter
+    assert cov["dropped_unknown_key_names"] == ["zz_undocumented_gateway_key"]
+    manual = json.loads(files["reports/manual-reconfiguration.json"])
+    unknown = [i for i in manual["items"] if i["category"] == "unknown_setting"]
+    assert {(i["table"], i["key"]) for i in unknown} >= {("PaySetting", "zz_undocumented_gateway_key")}
     recs = {r["fields"]["NamePay"]: r["fields"]["ValuePay"] for r in _jsonl(files, "records/configuration/PaySetting.jsonl")}
     assert recs["minbalance"] == "20000"
     # tutorial text is allow-listed, but the card number and password inside it are redacted

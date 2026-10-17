@@ -834,6 +834,13 @@ class Converter:
                      "category": "gateway_or_payout_setting",
                      "action": "Enter it again in NEXA's own payment/gateway settings if it is still needed.",
                      "action_fa": "در صورت نیاز، در تنظیمات درگاه/پرداخت NEXA دوباره وارد شود."})
+            for key in cov.get("dropped_unknown_key_names") or ():  # undocumented: treated as secret
+                self.out.manual_reconfiguration.append(
+                    {"table": cov["table"], "column": None, "key": key, "rows": 1, "basis": "key_allow_list",
+                     "category": "unknown_setting",
+                     "action": "Undocumented setting, not carried: review it and enter it again in NEXA if it is "
+                               "still needed.",
+                     "action_fa": "تنظیم بدون مستند منتقل نشد؛ بررسی و در صورت نیاز در NEXA دوباره وارد شود."})
         if unclassified:
             self.out.block("UNCLASSIFIED_TABLE", unclassified)
             self.blocker_messages.setdefault(

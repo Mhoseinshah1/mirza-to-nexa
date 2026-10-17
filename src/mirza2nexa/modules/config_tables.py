@@ -323,6 +323,10 @@ def _export_plain(ctx: ModuleContext, stats, spec: TableSpec) -> int:
     return n
 
 
+#: Bound on the unknown key names listed per settings table (the count is always exact).
+_MAX_UNKNOWN_KEY_NAMES = 200
+
+
 def _export_kv(ctx: ModuleContext, stats, spec: TableSpec) -> tuple[int, int]:
     key_col, value_col, allowed, known_secret = KV_TABLES[spec.name]
     sink = ctx.open(f"records/configuration/{stats.name}.jsonl")
@@ -331,6 +335,7 @@ def _export_kv(ctx: ModuleContext, stats, spec: TableSpec) -> tuple[int, int]:
     dup = [0]
     exported = dropped = unknown = 0
     secret_present: list[str] = []
+    unknown_names: set[str] = set()
     for _rowno, row in ctx.rows(stats):
         ctx.tick()
         name = row.get(key_col)
@@ -341,13 +346,18 @@ def _export_kv(ctx: ModuleContext, stats, spec: TableSpec) -> tuple[int, int]:
                     secret_present.append(name)
             else:
                 unknown += 1
+                if name is not None:
+                    unknown_names.add(str(name))
             continue
         kept = {key_col: name, value_col: row.get(value_col)}
         sink.write(_record(ctx, stats, kept, record_type="legacy_configuration_row", klass=spec.klass, keys=keys,
                            seen=seen, dup=dup))
         exported += 1
     _dup_review(ctx, stats.name, dup[0])
+    # The NAMES of unknown keys (never their values) go to the manual-reconfiguration report, so the
+    # operator is told which fork-specific setting to review or enter again in NEXA.
     ctx.coverage(stats.name, dropped_secret_keys=sorted(secret_present), dropped_unknown_keys=unknown,
+                 dropped_unknown_key_names=sorted(unknown_names)[:_MAX_UNKNOWN_KEY_NAMES],
                  key_allow_list=True)
     if unknown:
         ctx.warn("CONFIG_UNKNOWN_KEYS_DROPPED", unknown,
