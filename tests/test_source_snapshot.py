@@ -407,3 +407,39 @@ def test_snapshot_write_is_cancellable(tmp_path):
             col.write(PackageWriter(tmp_path / "stage"), cancel=token)
     finally:
         col.close()
+
+
+# ---- user.roll_Status (USER_TERMS_READ_SET, converter 0.8.1) ------------------------------
+
+_USER_ROLL = ("CREATE TABLE `user` (`id` varchar(20) NOT NULL, `Balance` int(11) NOT NULL, `limit_usertest` int(11) NOT NULL,"
+              " `User_Status` varchar(20) DEFAULT 'Active', `roll_Status` varchar(200) DEFAULT NULL, PRIMARY KEY (`id`))"
+              " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;\n")
+
+
+def test_roll_status_is_snapshotted_when_the_dump_has_it(tmp_path):
+    sql = _USER_ROLL + "INSERT INTO `user` VALUES ('1',5,0,'Active','1'),('2',6,0,'Active',NULL);\n"
+    _c, out = _snapshot_of(tmp_path, sql)
+    assert "roll_Status" in ss.ALLOWLIST["user"]
+    cat = out["result"].catalog
+    assert "roll_Status" in [c["column"] for c in next(t for t in cat["tables"] if t["name"] == "user")["columns"]]
+    assert "roll_Status" in cat["snapshot_tables"]["user"]["columns"]
+    head, *rows = read_jsonl(out["stage"] / "source" / "tables" / "user.jsonl")
+    i = head["columns"].index("roll_Status")
+    assert [r["c"][i] for r in rows] == ["1", None]
+
+
+def test_roll_status_absent_from_the_dump_is_absent_from_the_snapshot(tmp_path):
+    _c, out = _snapshot_of(tmp_path, _USER.format(bal="int(11)") + "INSERT INTO `user` VALUES ('1',5,0,'Active','t');\n")
+    head, *_rows = read_jsonl(out["stage"] / "source" / "tables" / "user.jsonl")
+    assert "roll_Status" not in head["columns"]
+    assert "roll_Status" not in out["result"].catalog["snapshot_tables"]["user"]["columns"]
+    assert out["result"].blockers == {}
+
+
+def test_full_conversion_carries_roll_status_into_the_user_rows(converted):
+    # the synthetic backup's user table has roll_Status (values like "v20")
+    _tmp, _zp, _exp, res = converted
+    head, *rows = _lines(res.stage_dir / "source" / "tables" / "user.jsonl")
+    i = head["columns"].index("roll_Status")
+    assert any(r["c"][i] for r in rows)
+    assert not any(b["code"].startswith("SOURCE_SNAPSHOT_") for b in res.report["blockers"])

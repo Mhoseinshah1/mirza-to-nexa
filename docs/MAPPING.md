@@ -10,7 +10,7 @@ the review queue or blocks it. It never makes up a value.
 ## Ground rules
 
 * **Source contract:** the converter uses NEXA's frozen legacy read set v1 (`source-port.ts:36-83`), plus
-  the required `user.User_Status` from NEXA's user-status read set (`read-set.ts:383-399`).
+  the required `user.User_Status` from NEXA's user-status read set (`read-set.ts:383-399`). The source snapshot also carries the optional `user.roll_Status` of NEXA's `USER_TERMS_READ_SET` (converter 0.8.1); the converter's own mapping does not use it.
   * Tables: `user`, `invoice`, `product`. Names are matched case-sensitively.
   * Required columns:
     * `user`: `id`, `Balance`, `limit_usertest`, `User_Status`

@@ -53,9 +53,13 @@ UNLABELLED_MARKER = "SYNTHETIC (unlabelled marker)"
 #: Union of every column NEXA's legacy importer reads from each table, in this order:
 #: IMPORT_READ_SET_V1 (source-port.ts:36-83), USER_STATUS_READ_SET (read-set.ts:395-399),
 #: PRODUCTS_READ_SET (products-read-set.ts:40-62), INVOICE_ARCHIVE_READ_SET
-#: (invoice-archive-read-set.ts:63-95). Exact, case-sensitive names; written when present.
+#: (invoice-archive-read-set.ts:63-95), USER_TERMS_READ_SET (read-set.ts: user.id + optional
+#: roll_Status, the rules-accepted flag; a source lacking it is refused by NEXA with
+#: SOURCE_SCHEMA_MISSING_COLUMN when the snapshot omits it, so it is carried since 0.8.1).
+#: Exact, case-sensitive names; written when present.
 ALLOWLIST: dict[str, tuple[str, ...]] = {
-    "user": ("id", "Balance", "limit_usertest", "agent", "number", "username", "User_Status"),
+    "user": ("id", "Balance", "limit_usertest", "agent", "number", "username", "User_Status",
+             "roll_Status"),
     "invoice": ("id_invoice", "id_user", "username", "Status", "is_test", "code_panel", "code_product", "Volume",
                 "Service_time", "time_unit", "is_custom", "price_product", "Service_location", "time_sell",
                 "name_product", "note", "refral", "time_cron", "notifctions"),
