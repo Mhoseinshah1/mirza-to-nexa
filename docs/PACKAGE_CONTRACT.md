@@ -158,7 +158,7 @@ byte-identical (`tests/test_source_snapshot.py`).
   ],
   "snapshot_tables": {
     "user": {"file": "source/tables/user.jsonl", "primary_key": "id",
-             "columns": ["id", "Balance", "limit_usertest", "agent", "number", "username", "User_Status"],
+             "columns": ["id", "Balance", "limit_usertest", "agent", "number", "username", "User_Status", "roll_Status"],
              "rows": 200003},
     "…": "…"
   }
@@ -176,12 +176,12 @@ byte-identical (`tests/test_source_snapshot.py`).
 ### `source/tables/<table>.jsonl` (`user`, `invoice`, `product`)
 Line 1 is a header, every further line is one row:
 ```
-{"columns":["id","Balance","limit_usertest","agent","number","username","User_Status"],"format":"m2n.source-table.v1","primary_key":"id","table":"user"}
-{"c":["7000000000","0","0","n","none","synthetic_user_0","Active"]}
+{"columns":["id","Balance","limit_usertest","agent","number","username","User_Status","roll_Status"],"format":"m2n.source-table.v1","primary_key":"id","table":"user"}
+{"c":["7000000000","0","0","n","none","synthetic_user_0","Active","1"]}
 ```
 * **Columns** are the NEXA allowlist present in the dump, in this fixed order (the union of what
-  `IMPORT_READ_SET_V1`, `user-status`, `products` and `invoice-archive` read; exact, case-sensitive names):
-  * `user`: `id, Balance, limit_usertest, agent, number, username, User_Status`
+  `IMPORT_READ_SET_V1`, `user-status`, `user-terms` (`USER_TERMS_READ_SET`: `id` + optional `roll_Status`, added in converter 0.8.1), `products` and `invoice-archive` read; exact, case-sensitive names):
+  * `user`: `id, Balance, limit_usertest, agent, number, username, User_Status, roll_Status`
   * `invoice`: `id_invoice, id_user, username, Status, is_test, code_panel, code_product, Volume, Service_time,
     time_unit, is_custom, price_product, Service_location, time_sell, name_product, note, refral, time_cron,
     notifctions`
