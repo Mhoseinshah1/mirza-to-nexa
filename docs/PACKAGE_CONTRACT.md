@@ -314,7 +314,8 @@ content contract 1.5.0.
 The `nexa-contract` job converts a password-protected synthetic ZIP using the current
 converter branch. It opens the encrypted output with the reader from the pinned Nexa
 commit in `.github/workflows/ci.yml`, then validates the history file plan, records,
-and expected carried files. Nexa owns the PostgreSQL import and compaction test.
+expected carried files, and the RickPanel provider identifier. Nexa owns the PostgreSQL
+import and compaction test.
 
 For a contract change, verify the new converter against supported Nexa readers and update
 the Nexa fixture generator and assertions. Update the converter CI pin to the reviewed

@@ -45,13 +45,19 @@ def test_only_the_nexa_rickpanel_identifier_is_accepted():
 @pytest.mark.skipif(not (NEXA / "packages/contracts/src/provider.ts").exists(), reason="NEXA source not available")
 def test_identifiers_match_the_nexa_source():
     """The provider id and display name are read from NEXA, not guessed."""
-    prov = (NEXA / "packages/contracts/src/provider.ts").read_text(encoding="utf-8").splitlines()
-    assert re.search(r"PROVIDER_TYPES = \[[^\]]*'rickpanel'", prov[179])
-    assert "canonicalName: 'RickPanel'" in prov[1777]
-    adapter = (NEXA / "apps/api/src/modules/platform/providers/infrastructure/rickpanel.adapter.ts")
-    assert "canonicalName: 'RickPanel'" in adapter.read_text(encoding="utf-8").splitlines()[143]
-    importer = (NEXA / "docs/legacy-migration/importer.md").read_text(encoding="utf-8").splitlines()
-    assert "`rickpanel`" in importer[283] and '"codePanel"' in importer[260]
+    provider = (NEXA / "packages/contracts/src/provider.ts").read_text(encoding="utf-8")
+    assert re.search(r"export const PROVIDER_TYPES\s*=\s*\[[^\]]*'rickpanel'", provider)
+    assert re.search(
+        r"const RICKPANEL:\s*ProviderDescriptor\s*=\s*\{\s*"
+        r"key:\s*'rickpanel',\s*canonicalName:\s*'RickPanel',", provider,
+    )
+    adapter = (NEXA / "apps/api/src/modules/platform/providers/infrastructure/rickpanel.adapter.ts").read_text(
+        encoding="utf-8",
+    )
+    assert re.search(r"const DESCRIPTOR:\s*ProviderDescriptor\s*=\s*providerDescriptor\('rickpanel'\)", adapter)
+    importer = (NEXA / "docs/legacy-migration/importer.md").read_text(encoding="utf-8")
+    assert re.search(r'"panels":\s*\[\{\s*"codePanel":', importer)
+    assert re.search(r"every named panel must exist[^.]+be `rickpanel`", importer)
 
 
 def _records(stage: Path) -> dict[str, bytes]:
