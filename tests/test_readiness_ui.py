@@ -248,7 +248,7 @@ def test_ui_copy_describes_the_nexa_restore_path_not_a_missing_importer():
             assert stale not in text, (name, stale)
     note = report_fa.NEXA_RESTORE_NOTE_FA
     for phrase in ("فایل بکاپ NEXA برای بازیابی از میرزا", "بکاپ و بازیابی", "عملیات بازیابی", "بکاپ محافظ",
-                   "منتشر نشده", "نصب آزمایشی"):
+                   "Nexa v0.9.21", "نصب آزمایشی"):
         assert phrase in note, phrase
     assert note in texts["readiness.html"]
     assert 'data-testid="restore-steps"' in texts["index.html"]

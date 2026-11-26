@@ -137,8 +137,9 @@ def validate_report(report: dict, manifest: dict, label: str, out: Path | None =
         rd = json.loads(rd_path.read_text(encoding="utf-8"))
         check(rd.get("verdict", {}).get("code") in {"NOT_READY_FOR_IMPORT", "READY_FOR_IMPORTER_DRY_RUN"},
               f"{label}: readiness verdict {rd.get('verdict')}")
-        check(any(b.get("code") == "NEXA_RESTORE_PATH_UNRELEASED" for b in rd.get("import_blockers", [])),
-              f"{label}: readiness must state NEXA_RESTORE_PATH_UNRELEASED")
+        check(rd.get("readiness_version") == "1.2.0", f"{label}: incorrect readiness version")
+        check(all(b.get("code") != "NEXA_RESTORE_PATH_UNRELEASED" for b in rd["import_blockers"]),
+              f"{label}: readiness must reflect the released Nexa importer")
         check(rd.get("ownership", {}).get("available") is True, f"{label}: readiness has no ownership section")
         check(rd.get("review", {}).get("codes_without_explicit_rule") == {},
               f"{label}: review codes without taxonomy rule: {rd.get('review', {}).get('codes_without_explicit_rule')}")

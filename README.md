@@ -13,7 +13,7 @@ Local-first, offline migration converter for password-protected ZIP archives con
 * **Windows:** see [`docs/INSTALL_WINDOWS_FA.md`](docs/INSTALL_WINDOWS_FA.md) (prebuilt exe from CI artifacts, or `pip install .` then `mirza2nexa`).
 * **Developers:** `python -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]" && pytest`
   (`pytest -m e2e` for browser tests, `pytest -m perf -s` for the 200k-customer benchmark).
-* **CLI:** `mirza2nexa convert backup.zip -o out --money-unit toman --password-env ZIP_PW`, `mirza2nexa verify|compare|synth`.
+* **CLI:** `mirza2nexa convert backup.zip -o out --key-out private/export.nxkey --money-unit toman --password-env ZIP_PW`, `mirza2nexa verify|compare|synth`. [Key-file handling](docs/SECURITY.md#cli-key-files).
 
 ## Documentation
 | Doc | Content |

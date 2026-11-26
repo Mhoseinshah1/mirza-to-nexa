@@ -30,9 +30,9 @@ the file, presses «بررسی» and gives the key file or passphrase; NEXA veri
 mapping, ownership and dry-run counts before anything is written; «تأیید بازیابی» then takes a protective backup,
 freezes writes, imports through the existing nxpkg migration engine, reconciles and takes a backup. It is not a
 `.nxb`: a `.nxb` is encrypted under the installation's own key and replaces the whole database. That restore path
-is in nexa-bot draft PR #278 — **under review, not released** — so for now only a test installation restores a
-package, and `reports/migration-readiness.json` (readiness 1.1.0) keeps the import blocker
-`NEXA_RESTORE_PATH_UNRELEASED` (it replaced `IMPORTER_NOT_BUILT`).
+landed in Nexa PR #278 and is available in v0.9.21. Readiness report 1.2.0 removes the obsolete
+`NEXA_RESTORE_PATH_UNRELEASED` blocker. The report describes the package's readiness for testing.
+The operator verifies the installed Nexa version and target environment separately.
 
 ## Fields every record has
 
@@ -279,13 +279,9 @@ this changed (the real cutover is a fresh import). Each carry record also has it
 **What NEXA does with it (nexa-bot, read-only review).** `legacy-history/application/record-map.ts` accepts every
 new file without change (`HISTORY_DIRECTORIES` `records/archive/` and `records/configuration/`, file name
 `[A-Za-z0-9_]{1,64}.jsonl`, known `record_type`, `legacy:` key, no live flag) and stores each record in
-`legacy_history_records`. Two gaps remain on the NEXA side; neither blocks an import:
-1. **Customer link**: `USER_ID_PATHS` has no entry for `archive_row`, so these records are stored with
-   `legacy_user_id = NULL` and Customer 360 (`listForCustomer`) does not list them. One line makes it so:
-   `archive_row: [['customer', 'telegram_user_id']]` in `USER_ID_PATHS` (no migration: the column exists).
-2. **Display without PII permission**: `redaction.ts` keeps only `class` for `archive_row` /
-   `configuration_row`; with `legacy.invoices.pii.view` the whole record is shown (audited). Adding non-personal paths
-   (e.g. `carry`, `schema`) to that allowlist is optional.
+`legacy_history_records`. Nexa links archive records with a valid `customer.telegram_user_id` to
+the imported customer for Customer 360. Viewing customer-identifying fields requires
+`legacy.invoices.pii.view` and is audited.
 
 ## Companion file: `ownership-decisions.json` (not inside the package)
 
@@ -312,3 +308,15 @@ These fields are added on top of the 1.0.0 manifest:
 
 The manifest's `package_schema_version` is set by the converter (`nxpkg/manifest.py`); this document describes
 content contract 1.5.0.
+
+## Compatibility CI
+
+The `nexa-contract` job converts a password-protected synthetic ZIP using the current
+converter branch. It opens the encrypted output with the reader from the pinned Nexa
+commit in `.github/workflows/ci.yml`, then validates the history file plan, records,
+and expected carried files. Nexa owns the PostgreSQL import and compaction test.
+
+For a contract change, verify the new converter against supported Nexa readers and update
+the Nexa fixture generator and assertions. Update the converter CI pin to the reviewed
+Nexa commit that supports the change. Keep this pin independent of the Nexa workflow's
+converter pin so each PR can complete its checks without a cross-repository CI dependency.

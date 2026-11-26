@@ -388,7 +388,7 @@ def test_coverage_page_package_preview_and_persian_reports(ui, server, tmp_path)
     steps = page.locator("[data-testid=restore-steps]")
     assert steps.is_visible() and steps.locator("ol > li").count() == 6
     steps_text = steps.text_content() or ""
-    for phrase in ("بکاپ و بازیابی", "عملیات بازیابی", "بررسی", "تأیید بازیابی", "بکاپ محافظ", "منتشر نشده"):
+    for phrase in ("بکاپ و بازیابی", "عملیات بازیابی", "بررسی", "تأیید بازیابی", "بکاپ محافظ", "نصب آزمایشی"):
         assert phrase in steps_text, phrase
     assert "فایل بکاپ NEXA" in (page.text_content("#h-download") or "")
     assert "Importer" not in (page.text_content("#view-download") or "")
@@ -422,8 +422,10 @@ def test_migration_readiness_page_and_downloads(ui, server, tmp_path):
                 "readiness-review-groups", "readiness-owner-decisions", "readiness-import-blockers"):
         assert page.is_visible(f"[data-testid={tid}]"), tid
         assert PERSIAN.search(page.text_content(f"[data-testid={tid}]") or ""), tid
-    blockers = page.locator("[data-testid=readiness-import-blockers] li[data-code=NEXA_RESTORE_PATH_UNRELEASED]")
-    assert blockers.count() == 1
+    blockers = page.locator("[data-testid=readiness-import-blockers] li[data-code]")
+    assert "NEXA_RESTORE_PATH_UNRELEASED" not in [
+        blockers.nth(i).get_attribute("data-code") for i in range(blockers.count())
+    ]
     assert page.locator("[data-testid=readiness-owner-decisions] li[data-decision]").count() >= 1
 
     body = page.text_content("#view-readiness") or ""

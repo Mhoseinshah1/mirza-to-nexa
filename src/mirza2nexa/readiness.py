@@ -6,10 +6,8 @@ package means *ready for a restore on a NEXA test installation*; it is never a p
 restore permission — the verdict here says so explicitly.
 
 The package is restored in NEXA's Web Admin («بکاپ و بازیابی ← عملیات بازیابی»), which checks it
-before anything is written. That restore path exists only in a NEXA version still under review
-(nexa-bot draft PR #278, unreleased), so ``NEXA_RESTORE_PATH_UNRELEASED`` stays an import blocker:
-a verdict can at best say "restore on a test installation", never "restore in production". The
-blocker is removed in the release that ships against a released NEXA version, not before.
+before anything is written. The converter cannot check the installed NEXA version or its
+operational readiness. The strongest verdict remains readiness for a test installation.
 """
 
 from __future__ import annotations
@@ -18,9 +16,8 @@ from typing import Any
 
 from . import __version__
 
-#: 1.1.0: ``IMPORTER_NOT_BUILT`` replaced by ``NEXA_RESTORE_PATH_UNRELEASED`` (same position, still
-#: blocking); verdict codes unchanged.
-READINESS_VERSION = "1.1.0"
+#: 1.2.0 removes the obsolete unreleased-importer blocker. Verdict codes are unchanged.
+READINESS_VERSION = "1.2.0"
 
 
 def _sec(report: dict[str, Any], name: str) -> dict[str, Any]:
@@ -150,10 +147,7 @@ def build(report: dict[str, Any], taxonomy: dict[str, Any], *, package_contract_
 
     # ---- import blockers & verdict --------------------------------------------------------
     blockers = report.get("blockers") or []
-    import_blockers = [{"code": "NEXA_RESTORE_PATH_UNRELEASED",
-                        "message_fa": "بازیابی این فایل از «بکاپ و بازیابی ← عملیات بازیابی» در نسخه‌ای از NEXA است "
-                                      "که هنوز در حال بررسی است و منتشر نشده؛ فعلاً فقط روی نصب آزمایشی NEXA، "
-                                      "نه سرور اصلی."}]
+    import_blockers = []
     if report.get("readiness") != "ready":
         import_blockers.append({"code": "PACKAGE_BLOCKED",
                                 "message_fa": "بسته دارای مسدودکننده است و باید ابتدا رفع شود."})

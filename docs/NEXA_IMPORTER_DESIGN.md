@@ -23,8 +23,8 @@
 > restored from NEXA's Web Admin «بکاپ و بازیابی ← عملیات بازیابی»: choose file → «بررسی» (key file or passphrase;
 > package checks, panel mapping, ownership, dry-run counts, nothing written) → «تأیید بازیابی» (protective backup,
 > write freeze, import by the `recovery` process role through the nxpkg migration engine, reconciliation, backup).
-> This path is in nexa-bot draft PR #278, which is under review and unreleased; until it is released only a test
-> installation restores a package. See `PACKAGE_CONTRACT.md` §"How NEXA consumes the package".
+> Nexa PR #278 introduced this path, which is available in v0.9.21. See `PACKAGE_CONTRACT.md` §"How NEXA
+> consumes the package".
 
 ## 0. Principles (each one is tested in §15)
 
