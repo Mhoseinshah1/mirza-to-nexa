@@ -1,6 +1,6 @@
 """Headless command line (same engine as the UI).
 
-    mirza2nexa convert BACKUP.zip -o OUT_DIR [--money-unit toman|rial] [--ask-password] [--previous-package P --previous-key K]
+    mirza2nexa convert BACKUP.zip -o OUT_DIR [--key-out KEY.nxkey] [--money-unit toman|rial] [--ask-password] [--previous-package P --previous-key K]
     mirza2nexa verify PACKAGE.nxpkg --key-file KEY.nxkey | --ask-passphrase
     mirza2nexa compare OLD.nxpkg NEW.nxpkg --old-key-file A --new-key-file B
     mirza2nexa synth OUT.zip [--users N] [--password-env VAR]
@@ -18,10 +18,12 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 from .archive import cleanup_workspace, secure_workspace
 from .errors import MigrationError
+from .key_output import publish_key
 from .panel_targets import parse_cli as parse_cli_targets
 
 
@@ -45,15 +47,35 @@ def _key_args(path: str | None, ask: bool, env: str | None) -> dict[str, str]:
     raise SystemExit("a key file or passphrase is required")
 
 
+def _write_report(path: Path, text: str) -> None:
+    # Replace the directory entry so a pre-existing symlink or hard link is never followed.
+    with tempfile.TemporaryDirectory(prefix=".mirza-report-", dir=path.parent) as temp:
+        staged = Path(temp) / path.name
+        staged.write_text(text, encoding="utf-8")
+        staged.replace(path)
+
+
 def cmd_convert(a: argparse.Namespace) -> int:
     from .nxpkg import PackageReader
     from .pipeline import ConvertOptions, convert_archive
 
+    if a.key_out and (a.ask_package_passphrase or a.package_passphrase_env):
+        print("error: --key-out requires a generated key", file=sys.stderr)
+        return 1
+    explicit_key = Path(a.key_out) if a.key_out else None
+    if explicit_key is not None and os.name == "nt" and (
+        explicit_key.is_reserved() or explicit_key.name.endswith((".", " "))
+        or any(c in '<>:"|?*' or ord(c) < 32 for c in explicit_key.name)
+    ):
+        print("error: --key-out must use an ordinary Windows filename", file=sys.stderr)
+        return 1
     out_dir = Path(a.output)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    ws = secure_workspace(Path(a.workdir) if a.workdir else None)
+    ws = None
     prev_ws = None
     try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir = out_dir.resolve(strict=True)
+        ws = secure_workspace(Path(a.workdir) if a.workdir else None)
         pp_check = _secret(False, a.package_passphrase_env, "") if a.package_passphrase_env else None
         if pp_check is not None and len(pp_check) < 12:
             print("error: package passphrase must be at least 12 characters", file=sys.stderr)
@@ -86,29 +108,60 @@ def cmd_convert(a: argparse.Namespace) -> int:
 
         res = convert_archive(Path(a.backup), ws, opts, stage=stage)
         pkg = out_dir / res.package_path.name
-        shutil.move(str(res.package_path), pkg)
-        (out_dir / "report.json").write_text(json.dumps(res.report, ensure_ascii=False, indent=1), encoding="utf-8")
+        key_path = explicit_key if explicit_key is not None else pkg.with_suffix(".nxkey")
+        key_path = key_path.parent.resolve(strict=True) / key_path.name
+        if res.key_text and (
+            key_path in (pkg, out_dir / "report.json", out_dir / "migration-readiness.json",
+                         out_dir / "migration-readiness.html") or os.path.lexists(key_path)
+        ):
+            raise FileExistsError("key output already exists or conflicts with another output")
+        # Stage the encrypted package on the output filesystem. If key publication fails,
+        # remove the package only if it still names the file we published.
+        with tempfile.TemporaryDirectory(prefix=".mirza-package-", dir=out_dir) as temp:
+            staged = Path(temp) / pkg.name
+            shutil.move(res.package_path, staged)
+            package_stat = staged.stat()
+            if os.name == "nt":
+                staged.rename(pkg)
+            else:
+                os.link(staged, pkg)
+            if res.key_text:
+                try:
+                    publish_key(key_path, res.key_text)
+                except OSError:
+                    if os.path.samestat(package_stat, pkg.lstat()):
+                        pkg.unlink()
+                    raise
+        _write_report(out_dir / "report.json", json.dumps(res.report, ensure_ascii=False, indent=1))
         readiness_src = res.report_path.parent / "migration-readiness.json"
         if readiness_src.is_file():  # aggregates only (no PII); the workspace is deleted below
             from .readiness_html import render_readiness_html
 
             readiness_doc = json.loads(readiness_src.read_text(encoding="utf-8"))
-            (out_dir / "migration-readiness.json").write_text(
-                json.dumps(readiness_doc, ensure_ascii=False, indent=1), encoding="utf-8")
-            (out_dir / "migration-readiness.html").write_text(render_readiness_html(readiness_doc), encoding="utf-8")
+            _write_report(out_dir / "migration-readiness.json", json.dumps(readiness_doc, ensure_ascii=False, indent=1))
+            _write_report(out_dir / "migration-readiness.html", render_readiness_html(readiness_doc))
             print(f"migration readiness: {out_dir / 'migration-readiness.html'}")
         if res.key_text:
-            key_path = out_dir / (pkg.stem + ".nxkey")
-            key_path.write_text(res.key_text + "\n", encoding="utf-8")
-            print(f"key file: {key_path}  (store it separately from the package)")
+            print(f"key file: {key_path}")
+            if key_path.parent == pkg.parent:
+                print("warning: the key and encrypted package are in the same directory; store them separately",
+                      file=sys.stderr)
         print(f"package:  {pkg}")
         print(f"readiness: {res.report['readiness']}  blockers: {[b['code'] for b in res.report['blockers']]}")
         return 0 if res.report["readiness"] == "ready" else 2
     except MigrationError as e:
         print(f"error [{e.code}]: {e.message_fa}", file=sys.stderr)
         return 1
+    except FileExistsError:
+        print("error: an output file already exists or conflicts with another output", file=sys.stderr)
+        return 1
+    except OSError:
+        print("error: could not read or securely publish conversion files; check the directories and filesystem",
+              file=sys.stderr)
+        return 1
     finally:
-        cleanup_workspace(ws)
+        if ws:
+            cleanup_workspace(ws)
         if prev_ws:
             cleanup_workspace(prev_ws)
 
@@ -217,6 +270,7 @@ def main(argv: list[str]) -> int:
     c = sub.add_parser("convert", help="convert a Mirza backup ZIP into a .nxpkg")
     c.add_argument("backup")
     c.add_argument("-o", "--output", required=True)
+    c.add_argument("--key-out", metavar="PATH", help="write the generated key at this new path")
     c.add_argument("--money-unit", choices=["toman", "rial"], default=None)
     c.add_argument("--panel-target", action="append", metavar="CODE=rickpanel[,panel_id=UUID][,version=1.0.0]",
                    help="NEXA target panel for a legacy code_panel (repeatable); only rickpanel (RickPanel)")

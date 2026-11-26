@@ -19,7 +19,7 @@ customer data. The table lists each threat, the defence against it, and the test
 | XSS from crafted SQL data | Strict CSP (`default-src 'none'`, no inline code); the UI writes server data only with `textContent` | E2E with CSP violation listener |
 | Network exposure | The address is hard-coded to `127.0.0.1` and cannot be configured | `__main__.py`, smoke test |
 | Package tampering, truncation, reordering, appending | AES-256-GCM STREAM with the final-chunk flag and AAD = hash of the header; a separate key check; `checksums.json` | `test_nxpkg.py` (10+ tampering cases), `test_conversion.py` |
-| Key stored with the package | The key file or passphrase is never written into the `.nxpkg`; the generated key exists only in memory for the session | `test_conversion.py::test_key_never_inside_package` |
+| Key stored with the package | The web UI holds generated keys in memory until the operator downloads them. The CLI writes a separate private key file and warns when outputs share a directory. | `test_conversion.py::test_key_never_inside_package`, `test_cli_key_output.py` |
 | Passwords in logs, history or reports | Passwords are only function arguments and are cleared after use; there is no access log; history keeps aggregates only | `test_server.py`, `test_conversion.py` |
 | Double credit, debt auto-settlement, history turned into payments | See `docs/MAPPING.md` (idempotency keys, flags, reconciliation) | `test_conversion.py` |
 | Unknown schema version | Fails closed: `SchemaUnknown`, or the dependent entities are blocked | `test_conversion.py` |
@@ -28,6 +28,23 @@ customer data. The table lists each threat, the defence against it, and the test
 | Panel credentials leaking | Held only by the probe for one run; the login form is sent once and dropped; never stored, logged, returned or exported; only a status class is kept | `test_ownership_review_api.py` |
 | Bulk ownership decision assigning a wrong owner | Only `invoice.id_user` can be accepted; serious conflicts and missing owners are quarantine-only; plan → typed-count commit; stale plans refused; decisions bound to the record hash; `ADMIN_APPROVED_UNVERIFIED` never counted as proven | `test_ownership_review.py` |
 | Tampering with the decision history or export | SHA-256 hash-chained audit log (`/audit/verify`), seal before import, export authenticated with HMAC under a key derived from the package secret | `test_ownership_review.py` |
+
+## CLI key files
+
+`mirza2nexa convert BACKUP.zip -o OUT --key-out /private/export.nxkey` writes the generated key
+to a new file in an existing directory. Without `--key-out`, the key goes beside the package
+and the CLI warns. Supplying a package passphrase produces no key file. Keep the key separate
+from the encrypted package and use directories controlled by your account.
+
+On POSIX the CLI stages the key with mode `0600` and publishes it with an exclusive link.
+On Windows it creates the staging file with a protected DACL granting access to the current
+account and publishes it with a non-replacing rename. Use an ACL-capable local volume such as
+NTFS for Windows keys. On POSIX the output filesystem must support hard links. The CLI rejects
+existing key and package paths, including symlinks. A handled write failure cleans up the staging
+file. A sudden process or machine shutdown may leave a private staging file to remove manually.
+Administrators and backups with filesystem privileges can access private files on either platform.
+
+The browser's download permissions depend on the browser, OS and destination directory.
 
 ## Residual risks and limits
 
